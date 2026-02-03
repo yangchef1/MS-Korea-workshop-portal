@@ -1,0 +1,78 @@
+name: Deploy to Azure App Service
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**.md'
+      - 'arm-templates/**'
+      - 'function/**'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  ACR_NAME: ${{ vars.ACR_NAME }}
+  IMAGE_NAME: workshop-portal
+
+# OIDC 토큰 발급을 위한 권한 설정 (Managed Identity 인증에 필수)
+permissions:
+  id-token: write   # OIDC 토큰 발급을 위해 필수
+  contents: read    # 소스 코드 체크아웃을 위해 필요
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Azure OIDC 인증 - Managed Identity의 Federated Credential 사용
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}           # Managed Identity의 Client ID
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}           # Azure AD Tenant ID
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }} # Subscription ID
+
+      # ACR 로그인 - Azure CLI를 통해 토큰 기반 인증
+      - name: Login to Azure Container Registry
+        run: az acr login --name ${{ env.ACR_NAME }}
+
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix=
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
+      - name: Output image digest
+        if: ${{ github.event_name != 'pull_request' }}
+        run: echo "Image pushed with digest ${{ steps.meta.outputs.tags }}"
+      
+      # Azure 로그아웃 (보안을 위해 세션 정리)
+      - name: Azure Logout
+        if: always()
+        run: az logout
