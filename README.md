@@ -32,40 +32,6 @@ A full-stack web application for managing Azure workshops at Microsoft Korea Clo
 - **Tailwind CSS** - Utility-first styling
 - **shadcn/ui** - High-quality UI components
 
-### Azure Services
-- Microsoft Entra ID
-- Azure Resource Manager
-- Azure Blob Storage
-- Azure Policy
-- Azure Cost Management
-- Azure Functions
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    FastAPI Application                      │
-│  ┌─────────────┐  ┌──────────────┐  ┌─────────────────┐   │
-│  │ React SPA   │  │  API Routes  │  │  Azure Services │   │
-│  │  (Static)   │  │  (REST API)  │  │   Integration   │   │
-│  └─────────────┘  └──────────────┘  └─────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
-                            │
-         ┌──────────────────┼──────────────────┐
-         │                  │                  │
-    ┌────▼────┐      ┌──────▼──────┐   ┌──────▼──────┐
-    │ Azure   │      │   Azure     │   │   Azure     │
-    │ Blob    │      │   AD        │   │  Resource   │
-    │ Storage │      │ (Entra ID)  │   │  Manager    │
-    └─────────┘      └─────────────┘   └─────────────┘
-         │
-    ┌────▼────────┐
-    │  Azure      │  Daily at 2 AM KST
-    │  Function   │  (Cleanup expired workshops)
-    │  (Timer)    │
-    └─────────────┘
-```
-
 ## Project Structure
 
 ```
