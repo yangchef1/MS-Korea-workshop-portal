@@ -1,6 +1,6 @@
 import axios, { type AxiosError, type InternalAxiosRequestConfig } from "axios"
 import { msalInstance, loginRequest } from "@/lib/msalConfig"
-import { InteractionRequiredAuthError } from "@azure/msal-browser"
+import { InteractionRequiredAuthError, BrowserAuthError } from "@azure/msal-browser"
 
 // API base URL - proxied through Vite in development
 const API_BASE_URL = "/api"
@@ -121,6 +121,11 @@ const acquireToken = async (forceRefresh = false): Promise<string | null> => {
         console.warn("Interaction required, performing full logout...")
         await redirectToLogin(true) // Force full logout
       }
+      // iframe-based silent renewal timed out (e.g. third-party cookies blocked)
+      if (error instanceof BrowserAuthError) {
+        console.warn("Browser auth error (likely iframe timeout), falling back to interactive login...")
+        await redirectToLogin(true)
+      }
       return null
     } finally {
       // Clear the promise after completion
@@ -198,11 +203,33 @@ apiClient.interceptors.response.use(
 )
 
 // Types for API responses
+export type UserRole = "admin" | "user"
+
 export interface User {
   user_id: string
   name: string
   email: string
   tenant_id: string
+  role: UserRole
+}
+
+export interface PortalUser {
+  user_id: string
+  name: string
+  email: string
+  role: UserRole
+  registered_at: string
+}
+
+export interface UpdateRoleRequest {
+  email: string
+  role: UserRole
+}
+
+export interface AddUserRequest {
+  email: string
+  role?: UserRole
+  name?: string
 }
 
 export interface Workshop {
@@ -261,6 +288,20 @@ export interface ArmTemplate {
   name: string
   description: string
   path: string
+}
+
+/** Detailed ARM template including raw JSON content. */
+export interface ArmTemplateDetail {
+  name: string
+  description: string
+  path: string
+  template_content: string
+}
+
+/** Request body for updating an ARM template. */
+export interface UpdateTemplateRequest {
+  description?: string
+  template_content?: string
 }
 
 export interface ResourceType {
@@ -353,7 +394,7 @@ export const workshopApi = {
   },
 
   getTemplates: async (): Promise<ArmTemplate[]> => {
-    const response = await apiClient.get<ArmTemplate[]>("/workshops/templates")
+    const response = await apiClient.get<ArmTemplate[]>("/templates")
     return response.data
   },
 
@@ -369,5 +410,76 @@ export const authApi = {
   me: async (): Promise<User> => {
     const response = await apiClient.get<User>("/auth/me")
     return response.data
+  },
+
+  /** 포털 사용자 목록 조회 (Admin 전용). */
+  listUsers: async (): Promise<PortalUser[]> => {
+    const response = await apiClient.get<PortalUser[]>("/auth/users")
+    return response.data
+  },
+
+  /** 사용자 역할 변경 (Admin 전용). */
+  updateUserRole: async (
+    email: string,
+    role: UserRole
+  ): Promise<PortalUser> => {
+    const response = await apiClient.patch<PortalUser>(
+      "/auth/users/role",
+      { email, role }
+    )
+    return response.data
+  },
+
+  /** 포털 사용자 추가 (Admin 전용). */
+  addUser: async (
+    email: string,
+    role: UserRole = "user",
+    name: string = ""
+  ): Promise<PortalUser> => {
+    const response = await apiClient.post<PortalUser>("/auth/users", {
+      email,
+      role,
+      name,
+    })
+    return response.data
+  },
+
+  /** 포털 사용자 제거 (Admin 전용). */
+  removeUser: async (email: string): Promise<void> => {
+    await apiClient.delete("/auth/users", { params: { email } })
+  },
+}
+
+// Template API (Admin only)
+export const templateApi = {
+  /** ARM 템플릿 목록을 조회한다. */
+  list: async (): Promise<ArmTemplate[]> => {
+    const response = await apiClient.get<ArmTemplate[]>("/templates")
+    return response.data
+  },
+
+  /** ARM 템플릿 상세 정보를 조회한다. */
+  get: async (name: string): Promise<ArmTemplateDetail> => {
+    const response = await apiClient.get<ArmTemplateDetail>(
+      `/templates/${encodeURIComponent(name)}`
+    )
+    return response.data
+  },
+
+  /** ARM 템플릿을 수정한다. */
+  update: async (
+    name: string,
+    data: UpdateTemplateRequest
+  ): Promise<ArmTemplate> => {
+    const response = await apiClient.patch<ArmTemplate>(
+      `/templates/${encodeURIComponent(name)}`,
+      data
+    )
+    return response.data
+  },
+
+  /** ARM 템플릿을 삭제한다. */
+  delete: async (name: string): Promise<void> => {
+    await apiClient.delete(`/templates/${encodeURIComponent(name)}`)
   },
 }

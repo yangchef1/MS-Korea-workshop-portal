@@ -1,106 +1,175 @@
-"""Azure Blob Storage service for workshop metadata and templates.
+"""Azure Table Storage 서비스 (비동기).
 
-Authentication: Uses DefaultAzureCredential (OIDC/Managed Identity)
-- Local development: Azure CLI credential (az login)
-- Production: Managed Identity assigned to App Service
+워크샵 메타데이터와 ARM 템플릿을 관리한다.
+azure.data.tables.aio를 사용하여 진정한 비동기 I/O를 제공한다.
+
+Tables:
+- workshops: 워크샵 메타데이터 (PartitionKey="workshop", RowKey=workshop_id)
+- passwords: 참가자 비밀번호 CSV (PartitionKey="password", RowKey=workshop_id)
+- templates: ARM 템플릿 (PartitionKey="template", RowKey=template_name)
 """
-import asyncio
 import json
 import logging
 from functools import lru_cache
-from typing import List, Optional, Dict
+from typing import Any
 
-from azure.storage.blob import BlobServiceClient
 from azure.core.exceptions import ResourceNotFoundError
+from azure.data.tables.aio import TableServiceClient
+from azure.identity.aio import (
+    AzureCliCredential,
+    ClientSecretCredential,
+    DefaultAzureCredential,
+)
+from pydantic import ValidationError as PydanticValidationError
 
 from app.config import settings
-from app.services.credential import get_azure_credential
+from app.exceptions import ValidationError as AppValidationError
+from app.models import WorkshopMetadata
 
 logger = logging.getLogger(__name__)
 
+WORKSHOPS_TABLE = "workshops"
+PASSWORDS_TABLE = "passwords"
+TEMPLATES_TABLE = "templates"
+USERS_TABLE = "users"
+
+WORKSHOP_PARTITION_KEY = "workshop"
+PASSWORD_PARTITION_KEY = "password"
+TEMPLATE_PARTITION_KEY = "template"
+USER_PARTITION_KEY = "user"
+
 
 class StorageService:
-    """Service for managing workshop data in Azure Blob Storage."""
+    """Azure Table Storage를 사용하여 워크샵 데이터를 관리하는 비동기 서비스.
 
-    def __init__(self):
-        """Initialize Blob Storage client using Azure Identity."""
+    azure.data.tables.aio의 네이티브 비동기 클라이언트를 사용하여
+    스레드풀 자원 소모 없이 Non-blocking I/O를 제공한다.
+    """
+
+    _tables_initialized: bool = False
+
+    def __init__(self) -> None:
+        """Azure Identity를 사용하여 비동기 Table Storage 클라이언트를 초기화한다."""
         try:
-            account_url = f"https://{settings.blob_storage_account}.blob.core.windows.net"
-            credential = get_azure_credential()
-            
-            self.blob_service_client = BlobServiceClient(
-                account_url=account_url,
-                credential=credential
+            account_url = (
+                f"https://{settings.table_storage_account}.table.core.windows.net"
+            )
+            credential = self._create_credential()
+
+            self.table_service_client = TableServiceClient(
+                endpoint=account_url,
+                credential=credential,
+                retry_total=settings.azure_retry_total,
+                retry_backoff_factor=settings.azure_retry_backoff_factor,
             )
 
-            self.container_name = settings.blob_container_name
-            self._ensure_container_exists()
-            logger.info("Initialized Storage service")
+            logger.info("Initialized async Table Storage service")
         except Exception as e:
-            logger.error("Failed to initialize Blob Storage client: %s", e)
+            logger.error("Failed to initialize Table Storage client: %s", e)
             raise
 
-    def _ensure_container_exists(self) -> None:
-        """Create container if it doesn't exist."""
-        try:
-            container_client = self.blob_service_client.get_container_client(
-                self.container_name
+    @staticmethod
+    def _create_credential() -> ClientSecretCredential | DefaultAzureCredential | AzureCliCredential:
+        """설정에 따라 적절한 비동기 Azure credential을 생성한다."""
+        if settings.azure_sp_tenant_id and settings.azure_sp_client_id and settings.azure_sp_client_secret:
+            return ClientSecretCredential(
+                tenant_id=settings.azure_sp_tenant_id,
+                client_id=settings.azure_sp_client_id,
+                client_secret=settings.azure_sp_client_secret,
             )
-            if not container_client.exists():
-                container_client.create_container()
-                logger.info("Created container: %s", self.container_name)
-        except Exception as e:
-            logger.warning("Container check failed: %s", e)
+        if settings.use_azure_cli_credential:
+            return AzureCliCredential()
+        return DefaultAzureCredential(
+            exclude_shared_token_cache_credential=True,
+            exclude_visual_studio_code_credential=True,
+            exclude_azure_powershell_credential=True,
+            exclude_interactive_browser_credential=True,
+        )
 
-    async def save_workshop_metadata(self, workshop_id: str, metadata: Dict) -> bool:
-        """Save workshop metadata as JSON.
+    async def _ensure_tables_exist(self) -> None:
+        """필요한 테이블이 존재하지 않으면 생성한다 (lazy 초기화)."""
+        if StorageService._tables_initialized:
+            return
+        for table_name in (WORKSHOPS_TABLE, PASSWORDS_TABLE, TEMPLATES_TABLE, USERS_TABLE):
+            try:
+                await self.table_service_client.create_table_if_not_exists(table_name)
+                logger.info("Ensured table exists: %s", table_name)
+            except Exception as e:
+                logger.warning("Table check failed for '%s': %s", table_name, e)
+        StorageService._tables_initialized = True
+
+    # ------------------------------------------------------------------
+    # Workshop metadata
+    # ------------------------------------------------------------------
+
+    async def save_workshop_metadata(self, workshop_id: str, metadata: dict[str, Any]) -> bool:
+        """워크샵 메타데이터를 테이블 엔티티로 저장한다.
+
+        Table Storage에는 스키마 검증이 없으므로, 저장 전에
+        Pydantic 모델로 앱 레벨 검증을 수행한다.
 
         Args:
-            workshop_id: Unique workshop identifier
-            metadata: Workshop metadata dictionary
+            workshop_id: 워크샵 고유 식별자.
+            metadata: 워크샵 메타데이터 딕셔너리.
 
         Returns:
-            True if successful
+            성공 시 True.
+
+        Raises:
+            AppValidationError: 메타데이터가 스키마 검증에 실패한 경우.
         """
-        def _save():
-            blob_name = f"workshops/{workshop_id}.json"
-            blob_client = self.blob_service_client.get_blob_client(
-                container=self.container_name,
-                blob=blob_name
-            )
-            json_data = json.dumps(metadata, indent=2, default=str)
-            blob_client.upload_blob(json_data, overwrite=True)
+        self._validate_workshop_metadata(metadata)
+        await self._ensure_tables_exist()
 
         try:
-            await asyncio.to_thread(_save)
+            table_client = self.table_service_client.get_table_client(WORKSHOPS_TABLE)
+            entity = _workshop_to_entity(workshop_id, metadata)
+            await table_client.upsert_entity(entity)
             logger.info("Saved workshop metadata: %s", workshop_id)
             return True
-
         except Exception as e:
             logger.error("Failed to save workshop metadata: %s", e)
             raise
 
-    async def get_workshop_metadata(self, workshop_id: str) -> Optional[Dict]:
-        """Retrieve workshop metadata.
+    @staticmethod
+    def _validate_workshop_metadata(metadata: dict[str, Any]) -> None:
+        """Pydantic 모델을 사용하여 메타데이터를 검증한다.
 
         Args:
-            workshop_id: Unique workshop identifier
+            metadata: 검증할 워크샵 메타데이터.
+
+        Raises:
+            AppValidationError: 검증 실패 시.
+        """
+        try:
+            WorkshopMetadata.model_validate(metadata)
+        except PydanticValidationError as e:
+            error_details = [
+                f"{err['loc']}: {err['msg']}" for err in e.errors()
+            ]
+            raise AppValidationError(
+                f"Workshop metadata validation failed: {'; '.join(error_details)}"
+            ) from e
+
+    async def get_workshop_metadata(self, workshop_id: str) -> dict[str, Any] | None:
+        """워크샵 메타데이터를 조회한다.
+
+        Args:
+            workshop_id: 워크샵 고유 식별자.
 
         Returns:
-            Workshop metadata dictionary or None if not found
+            워크샵 메타데이터 딕셔너리. 존재하지 않으면 None.
         """
-        def _get():
-            blob_name = f"workshops/{workshop_id}.json"
-            blob_client = self.blob_service_client.get_blob_client(
-                container=self.container_name,
-                blob=blob_name
-            )
-            blob_data = blob_client.download_blob().readall()
-            return json.loads(blob_data)
+
+        await self._ensure_tables_exist()
 
         try:
-            return await asyncio.to_thread(_get)
-
+            table_client = self.table_service_client.get_table_client(WORKSHOPS_TABLE)
+            entity = await table_client.get_entity(
+                partition_key=WORKSHOP_PARTITION_KEY,
+                row_key=workshop_id,
+            )
+            return _entity_to_workshop(entity)
         except ResourceNotFoundError:
             logger.warning("Workshop not found: %s", workshop_id)
             return None
@@ -108,114 +177,116 @@ class StorageService:
             logger.error("Failed to retrieve workshop metadata: %s", e)
             raise
 
-    async def list_all_workshops(self) -> List[Dict]:
-        """List all workshop metadata.
+    async def list_all_workshops(self) -> list[dict[str, Any]]:
+        """모든 워크샵 메타데이터를 조회한다.
 
         Returns:
-            List of workshop metadata dictionaries
+            created_at 내림차순으로 정렬된 워크샵 메타데이터 목록.
         """
-        def _list():
-            container_client = self.blob_service_client.get_container_client(
-                self.container_name
-            )
-            workshops = []
-            for blob in container_client.list_blobs(name_starts_with="workshops/"):
-                if blob.name.endswith(".json"):
-                    blob_client = container_client.get_blob_client(blob.name)
-                    blob_data = blob_client.download_blob().readall()
-                    metadata = json.loads(blob_data)
-                    workshops.append(metadata)
-            workshops.sort(key=lambda x: x.get('created_at', ''), reverse=True)
-            return workshops
+
+        await self._ensure_tables_exist()
 
         try:
-            return await asyncio.to_thread(_list)
-
+            table_client = self.table_service_client.get_table_client(WORKSHOPS_TABLE)
+            query_filter = f"PartitionKey eq '{WORKSHOP_PARTITION_KEY}'"
+            workshops = [
+                _entity_to_workshop(e)
+                async for e in table_client.query_entities(query_filter)
+            ]
+            workshops.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+            return workshops
         except Exception as e:
             logger.error("Failed to list workshops: %s", e)
             raise
 
     async def delete_workshop_metadata(self, workshop_id: str) -> bool:
-        """Delete workshop metadata and passwords.
+        """워크샵 메타데이터와 관련 비밀번호를 삭제한다.
 
         Args:
-            workshop_id: Unique workshop identifier
+            workshop_id: 워크샵 고유 식별자.
 
         Returns:
-            True if successful
+            성공 시 True.
         """
-        def _delete():
-            blob_client = self.blob_service_client.get_blob_client(
-                container=self.container_name,
-                blob=f"workshops/{workshop_id}.json"
+
+        await self._ensure_tables_exist()
+
+        try:
+            workshops_client = self.table_service_client.get_table_client(
+                WORKSHOPS_TABLE
             )
-            blob_client.delete_blob()
+            await workshops_client.delete_entity(
+                partition_key=WORKSHOP_PARTITION_KEY,
+                row_key=workshop_id,
+            )
 
             try:
-                passwords_blob = self.blob_service_client.get_blob_client(
-                    container=self.container_name,
-                    blob=f"workshops/{workshop_id}-passwords.csv"
+                passwords_client = self.table_service_client.get_table_client(
+                    PASSWORDS_TABLE
                 )
-                passwords_blob.delete_blob()
+                await passwords_client.delete_entity(
+                    partition_key=PASSWORD_PARTITION_KEY,
+                    row_key=workshop_id,
+                )
             except ResourceNotFoundError:
                 pass
 
-        try:
-            await asyncio.to_thread(_delete)
             logger.info("Deleted workshop: %s", workshop_id)
             return True
-
         except Exception as e:
             logger.error("Failed to delete workshop: %s", e)
             raise
 
+    # ------------------------------------------------------------------
+    # Passwords CSV
+    # ------------------------------------------------------------------
+
     async def save_passwords_csv(self, workshop_id: str, csv_content: str) -> bool:
-        """Save participant passwords as CSV.
+        """참가자 비밀번호 CSV를 테이블 엔티티로 저장한다.
 
         Args:
-            workshop_id: Unique workshop identifier
-            csv_content: CSV content string
+            workshop_id: 워크샵 고유 식별자.
+            csv_content: CSV 문자열.
 
         Returns:
-            True if successful
+            성공 시 True.
         """
-        def _save():
-            blob_name = f"workshops/{workshop_id}-passwords.csv"
-            blob_client = self.blob_service_client.get_blob_client(
-                container=self.container_name,
-                blob=blob_name
-            )
-            blob_client.upload_blob(csv_content, overwrite=True)
+
+        await self._ensure_tables_exist()
 
         try:
-            await asyncio.to_thread(_save)
+            table_client = self.table_service_client.get_table_client(PASSWORDS_TABLE)
+            entity = {
+                "PartitionKey": PASSWORD_PARTITION_KEY,
+                "RowKey": workshop_id,
+                "csv_content": csv_content,
+            }
+            await table_client.upsert_entity(entity)
             logger.info("Saved passwords CSV: %s", workshop_id)
             return True
-
         except Exception as e:
             logger.error("Failed to save passwords CSV: %s", e)
             raise
 
-    async def get_passwords_csv(self, workshop_id: str) -> Optional[str]:
-        """Retrieve passwords CSV.
+    async def get_passwords_csv(self, workshop_id: str) -> str | None:
+        """비밀번호 CSV를 조회한다.
 
         Args:
-            workshop_id: Unique workshop identifier
+            workshop_id: 워크샵 고유 식별자.
 
         Returns:
-            CSV content string or None if not found
+            CSV 문자열. 존재하지 않으면 None.
         """
-        def _get():
-            blob_name = f"workshops/{workshop_id}-passwords.csv"
-            blob_client = self.blob_service_client.get_blob_client(
-                container=self.container_name,
-                blob=blob_name
-            )
-            return blob_client.download_blob().readall().decode('utf-8')
+
+        await self._ensure_tables_exist()
 
         try:
-            return await asyncio.to_thread(_get)
-
+            table_client = self.table_service_client.get_table_client(PASSWORDS_TABLE)
+            entity = await table_client.get_entity(
+                partition_key=PASSWORD_PARTITION_KEY,
+                row_key=workshop_id,
+            )
+            return entity.get("csv_content", "")
         except ResourceNotFoundError:
             logger.warning("Passwords CSV not found: %s", workshop_id)
             return None
@@ -223,55 +294,171 @@ class StorageService:
             logger.error("Failed to retrieve passwords CSV: %s", e)
             raise
 
-    async def list_arm_templates(self) -> List[Dict]:
-        """List available ARM templates.
+    # ------------------------------------------------------------------
+    # Portal Users (role management)
+    # ------------------------------------------------------------------
+
+    async def save_portal_user(self, user_data: dict[str, Any]) -> bool:
+        """포털 사용자 정보를 저장 또는 업데이트한다.
+
+        이메일(lowercase)을 RowKey로 사용하여 화이트리스트 조회를 지원한다.
+
+        Args:
+            user_data: 사용자 정보 (email, name, user_id, role, registered_at).
 
         Returns:
-            List of template info dictionaries
+            성공 시 True.
         """
-        def _list():
-            container_client = self.blob_service_client.get_container_client(
-                self.container_name
-            )
-            templates = []
-            for blob in container_client.list_blobs(name_starts_with="templates/"):
-                if blob.name.endswith(".json"):
-                    filename = blob.name.split('/')[-1]
-                    templates.append({
-                        'name': filename,
-                        'description': '',
-                        'path': blob.name
-                    })
-            return sorted(templates, key=lambda x: x['name'])
+        await self._ensure_tables_exist()
 
         try:
-            return await asyncio.to_thread(_list)
+            table_client = self.table_service_client.get_table_client(USERS_TABLE)
+            email = user_data.get("email", "").strip().lower()
+            entity = {
+                "PartitionKey": USER_PARTITION_KEY,
+                "RowKey": email,
+                "user_id": user_data.get("user_id", ""),
+                "name": user_data.get("name", ""),
+                "role": user_data.get("role", "user"),
+                "registered_at": user_data.get("registered_at", ""),
+            }
+            await table_client.upsert_entity(entity)
+            logger.info("Saved portal user: %s", email)
+            return True
+        except Exception as e:
+            logger.error("Failed to save portal user: %s", e)
+            raise
 
+    async def get_portal_user(self, email: str) -> dict[str, Any] | None:
+        """포털 사용자 정보를 이메일로 조회한다.
+
+        Args:
+            email: 사용자 이메일.
+
+        Returns:
+            사용자 정보 딕셔너리. 존재하지 않으면 None.
+        """
+        await self._ensure_tables_exist()
+
+        try:
+            table_client = self.table_service_client.get_table_client(USERS_TABLE)
+            entity = await table_client.get_entity(
+                partition_key=USER_PARTITION_KEY,
+                row_key=email.strip().lower(),
+            )
+            return {
+                "user_id": entity.get("user_id", ""),
+                "name": entity.get("name", ""),
+                "email": entity["RowKey"],
+                "role": entity.get("role", "user"),
+                "registered_at": entity.get("registered_at", ""),
+            }
+        except ResourceNotFoundError:
+            return None
+        except Exception as e:
+            logger.error("Failed to get portal user: %s", e)
+            raise
+
+    async def delete_portal_user(self, email: str) -> bool:
+        """포털 사용자를 삭제한다.
+
+        Args:
+            email: 삭제할 사용자 이메일.
+
+        Returns:
+            성공 시 True.
+        """
+        await self._ensure_tables_exist()
+
+        try:
+            table_client = self.table_service_client.get_table_client(USERS_TABLE)
+            await table_client.delete_entity(
+                partition_key=USER_PARTITION_KEY,
+                row_key=email.strip().lower(),
+            )
+            logger.info("Deleted portal user: %s", email)
+            return True
+        except Exception as e:
+            logger.error("Failed to delete portal user: %s", e)
+            raise
+
+    async def list_portal_users(self) -> list[dict[str, Any]]:
+        """모든 포털 사용자를 조회한다.
+
+        Returns:
+            등록일 내림차순으로 정렬된 사용자 목록.
+        """
+        await self._ensure_tables_exist()
+
+        try:
+            table_client = self.table_service_client.get_table_client(USERS_TABLE)
+            query_filter = f"PartitionKey eq '{USER_PARTITION_KEY}'"
+            users = [
+                {
+                    "user_id": e.get("user_id", ""),
+                    "name": e.get("name", ""),
+                    "email": e["RowKey"],
+                    "role": e.get("role", "user"),
+                    "registered_at": e.get("registered_at", ""),
+                }
+                async for e in table_client.query_entities(query_filter)
+            ]
+            users.sort(
+                key=lambda x: x.get("registered_at", ""), reverse=True
+            )
+            return users
+        except Exception as e:
+            logger.error("Failed to list portal users: %s", e)
+            raise
+
+    # ------------------------------------------------------------------
+    # ARM Templates
+    # ------------------------------------------------------------------
+
+    async def list_arm_templates(self) -> list[dict[str, str]]:
+        """사용 가능한 ARM 템플릿 목록을 조회한다.
+
+        Returns:
+            템플릿 정보 딕셔너리 목록.
+        """
+
+        await self._ensure_tables_exist()
+
+        try:
+            table_client = self.table_service_client.get_table_client(TEMPLATES_TABLE)
+            query_filter = f"PartitionKey eq '{TEMPLATE_PARTITION_KEY}'"
+            templates = [
+                {
+                    "name": e["RowKey"],
+                    "description": e.get("description", ""),
+                    "path": e.get("path", e["RowKey"]),
+                }
+                async for e in table_client.query_entities(query_filter)
+            ]
+            return sorted(templates, key=lambda x: x["name"])
         except Exception as e:
             logger.error("Failed to list ARM templates: %s", e)
             raise
 
-    async def get_arm_template(self, template_name: str) -> Optional[Dict]:
-        """Retrieve ARM template content.
+    async def get_arm_template(self, template_name: str) -> dict[str, Any] | None:
+        """ARM 템플릿 콘텐츠를 조회한다.
 
         Args:
-            template_name: Template filename
+            template_name: 템플릿 파일명 (RowKey로 사용).
 
         Returns:
-            ARM template JSON or None if not found
+            ARM 템플릿 JSON. 존재하지 않으면 None.
         """
-        def _get():
-            blob_name = f"templates/{template_name}"
-            blob_client = self.blob_service_client.get_blob_client(
-                container=self.container_name,
-                blob=blob_name
-            )
-            blob_data = blob_client.download_blob().readall()
-            return json.loads(blob_data)
+
+        await self._ensure_tables_exist()
 
         try:
-            return await asyncio.to_thread(_get)
-
+            table_client = self.table_service_client.get_table_client(TEMPLATES_TABLE)
+            entity = await table_client.get_entity(
+                partition_key=TEMPLATE_PARTITION_KEY,
+                row_key=template_name,
+            )
+            return json.loads(entity.get("template_content", "{}"))
         except ResourceNotFoundError:
             logger.warning("ARM template not found: %s", template_name)
             return None
@@ -279,10 +466,169 @@ class StorageService:
             logger.error("Failed to retrieve ARM template: %s", e)
             raise
 
+    async def get_arm_template_detail(self, template_name: str) -> dict[str, Any] | None:
+        """ARM 템플릿 메타데이터와 콘텐츠를 함께 조회한다.
+
+        Args:
+            template_name: 템플릿 이름 (RowKey).
+
+        Returns:
+            name, description, template_content를 포함하는 딕셔너리. 없으면 None.
+        """
+        await self._ensure_tables_exist()
+
+        try:
+            table_client = self.table_service_client.get_table_client(TEMPLATES_TABLE)
+            entity = await table_client.get_entity(
+                partition_key=TEMPLATE_PARTITION_KEY,
+                row_key=template_name,
+            )
+            return {
+                "name": entity["RowKey"],
+                "description": entity.get("description", ""),
+                "path": entity.get("path", entity["RowKey"]),
+                "template_content": entity.get("template_content", "{}"),
+            }
+        except ResourceNotFoundError:
+            return None
+        except Exception as e:
+            logger.error("Failed to get ARM template detail '%s': %s", template_name, e)
+            raise
+
+    async def update_arm_template(
+        self,
+        template_name: str,
+        description: str | None = None,
+        template_content: str | None = None,
+    ) -> dict[str, str]:
+        """기존 ARM 템플릿의 메타데이터 또는 콘텐츠를 업데이트한다.
+
+        Args:
+            template_name: 업데이트할 템플릿 이름 (RowKey).
+            description: 새 설명. None이면 변경하지 않음.
+            template_content: 새 JSON 콘텐츠 문자열. None이면 변경하지 않음.
+
+        Returns:
+            업데이트된 템플릿 정보 딕셔너리.
+
+        Raises:
+            EntityNotFoundError: 템플릿이 존재하지 않는 경우.
+        """
+        from app.exceptions import EntityNotFoundError
+
+        await self._ensure_tables_exist()
+
+        table_client = self.table_service_client.get_table_client(TEMPLATES_TABLE)
+
+        try:
+            entity = await table_client.get_entity(
+                partition_key=TEMPLATE_PARTITION_KEY,
+                row_key=template_name,
+            )
+        except ResourceNotFoundError:
+            raise EntityNotFoundError(
+                f"ARM template '{template_name}' not found"
+            )
+
+        if description is not None:
+            entity["description"] = description
+        if template_content is not None:
+            entity["template_content"] = template_content
+
+        await table_client.update_entity(entity, mode="merge")
+        logger.info("Updated ARM template: %s", template_name)
+
+        return {
+            "name": entity["RowKey"],
+            "description": entity.get("description", ""),
+            "path": entity.get("path", entity["RowKey"]),
+        }
+
+    async def delete_arm_template(self, template_name: str) -> None:
+        """ARM 템플릿을 삭제한다.
+
+        Args:
+            template_name: 삭제할 템플릿 이름 (RowKey).
+
+        Raises:
+            EntityNotFoundError: 템플릿이 존재하지 않는 경우.
+        """
+        from app.exceptions import EntityNotFoundError
+
+        await self._ensure_tables_exist()
+
+        table_client = self.table_service_client.get_table_client(TEMPLATES_TABLE)
+
+        try:
+            await table_client.get_entity(
+                partition_key=TEMPLATE_PARTITION_KEY,
+                row_key=template_name,
+            )
+        except ResourceNotFoundError:
+            raise EntityNotFoundError(
+                f"ARM template '{template_name}' not found"
+            )
+
+        await table_client.delete_entity(
+            partition_key=TEMPLATE_PARTITION_KEY,
+            row_key=template_name,
+        )
+        logger.info("Deleted ARM template: %s", template_name)
+
+
+# ------------------------------------------------------------------
+# Entity ↔ Dict conversion helpers
+# ------------------------------------------------------------------
+
+
+def _workshop_to_entity(workshop_id: str, metadata: dict[str, Any]) -> dict[str, Any]:
+    """워크샵 메타데이터 dict를 Table Storage 엔티티로 변환한다.
+
+    Table Storage는 플랫 프로퍼티 타입만 지원하므로,
+    복합 필드(participants, policy)는 JSON 문자열로 직렬화한다.
+    """
+    return {
+        "PartitionKey": WORKSHOP_PARTITION_KEY,
+        "RowKey": workshop_id,
+        "name": metadata.get("name", ""),
+        "start_date": metadata.get("start_date", ""),
+        "end_date": metadata.get("end_date", ""),
+        "base_resources_template": metadata.get("base_resources_template", ""),
+        "status": metadata.get("status", "active"),
+        "created_at": metadata.get("created_at", ""),
+        "created_by": metadata.get("created_by", ""),
+        # JSON-serialized complex fields
+        "participants_json": json.dumps(
+            metadata.get("participants", []), default=str
+        ),
+        "policy_json": json.dumps(metadata.get("policy", {}), default=str),
+    }
+
+
+def _entity_to_workshop(entity: dict[str, Any]) -> dict[str, Any]:
+    """Table Storage 엔티티를 워크샵 메타데이터 dict로 변환한다."""
+    return {
+        "id": entity["RowKey"],
+        "name": entity.get("name", ""),
+        "start_date": entity.get("start_date", ""),
+        "end_date": entity.get("end_date", ""),
+        "base_resources_template": entity.get("base_resources_template", ""),
+        "status": entity.get("status", "active"),
+        "created_at": entity.get("created_at", ""),
+        "created_by": entity.get("created_by"),
+        "participants": json.loads(entity.get("participants_json", "[]")),
+        "policy": json.loads(entity.get("policy_json", "{}")),
+    }
+
+
+# ------------------------------------------------------------------
+# Singleton
+# ------------------------------------------------------------------
+
 
 @lru_cache(maxsize=1)
 def get_storage_service() -> StorageService:
-    """Get the StorageService singleton instance."""
+    """StorageService 싱글턴 인스턴스를 반환한다."""
     return StorageService()
 
 
