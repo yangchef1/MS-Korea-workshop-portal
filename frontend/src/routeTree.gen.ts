@@ -12,6 +12,8 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as LayoutRouteImport } from './routes/_layout'
 import { Route as LayoutIndexRouteImport } from './routes/_layout/index'
+import { Route as LayoutUsersRouteImport } from './routes/_layout/users'
+import { Route as LayoutTemplatesRouteImport } from './routes/_layout/templates'
 import { Route as LayoutWorkshopsCreateRouteImport } from './routes/_layout/workshops/create'
 import { Route as LayoutWorkshopsWorkshopIdRouteImport } from './routes/_layout/workshops/$workshopId'
 
@@ -29,6 +31,16 @@ const LayoutIndexRoute = LayoutIndexRouteImport.update({
   path: '/',
   getParentRoute: () => LayoutRoute,
 } as any)
+const LayoutUsersRoute = LayoutUsersRouteImport.update({
+  id: '/users',
+  path: '/users',
+  getParentRoute: () => LayoutRoute,
+} as any)
+const LayoutTemplatesRoute = LayoutTemplatesRouteImport.update({
+  id: '/templates',
+  path: '/templates',
+  getParentRoute: () => LayoutRoute,
+} as any)
 const LayoutWorkshopsCreateRoute = LayoutWorkshopsCreateRouteImport.update({
   id: '/workshops/create',
   path: '/workshops/create',
@@ -44,11 +56,15 @@ const LayoutWorkshopsWorkshopIdRoute =
 export interface FileRoutesByFullPath {
   '/': typeof LayoutIndexRoute
   '/login': typeof LoginRoute
+  '/templates': typeof LayoutTemplatesRoute
+  '/users': typeof LayoutUsersRoute
   '/workshops/$workshopId': typeof LayoutWorkshopsWorkshopIdRoute
   '/workshops/create': typeof LayoutWorkshopsCreateRoute
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
+  '/templates': typeof LayoutTemplatesRoute
+  '/users': typeof LayoutUsersRoute
   '/': typeof LayoutIndexRoute
   '/workshops/$workshopId': typeof LayoutWorkshopsWorkshopIdRoute
   '/workshops/create': typeof LayoutWorkshopsCreateRoute
@@ -57,19 +73,35 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_layout': typeof LayoutRouteWithChildren
   '/login': typeof LoginRoute
+  '/_layout/templates': typeof LayoutTemplatesRoute
+  '/_layout/users': typeof LayoutUsersRoute
   '/_layout/': typeof LayoutIndexRoute
   '/_layout/workshops/$workshopId': typeof LayoutWorkshopsWorkshopIdRoute
   '/_layout/workshops/create': typeof LayoutWorkshopsCreateRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/login' | '/workshops/$workshopId' | '/workshops/create'
+  fullPaths:
+    | '/'
+    | '/login'
+    | '/templates'
+    | '/users'
+    | '/workshops/$workshopId'
+    | '/workshops/create'
   fileRoutesByTo: FileRoutesByTo
-  to: '/login' | '/' | '/workshops/$workshopId' | '/workshops/create'
+  to:
+    | '/login'
+    | '/templates'
+    | '/users'
+    | '/'
+    | '/workshops/$workshopId'
+    | '/workshops/create'
   id:
     | '__root__'
     | '/_layout'
     | '/login'
+    | '/_layout/templates'
+    | '/_layout/users'
     | '/_layout/'
     | '/_layout/workshops/$workshopId'
     | '/_layout/workshops/create'
@@ -103,6 +135,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutIndexRouteImport
       parentRoute: typeof LayoutRoute
     }
+    '/_layout/users': {
+      id: '/_layout/users'
+      path: '/users'
+      fullPath: '/users'
+      preLoaderRoute: typeof LayoutUsersRouteImport
+      parentRoute: typeof LayoutRoute
+    }
+    '/_layout/templates': {
+      id: '/_layout/templates'
+      path: '/templates'
+      fullPath: '/templates'
+      preLoaderRoute: typeof LayoutTemplatesRouteImport
+      parentRoute: typeof LayoutRoute
+    }
     '/_layout/workshops/create': {
       id: '/_layout/workshops/create'
       path: '/workshops/create'
@@ -121,12 +167,16 @@ declare module '@tanstack/react-router' {
 }
 
 interface LayoutRouteChildren {
+  LayoutTemplatesRoute: typeof LayoutTemplatesRoute
+  LayoutUsersRoute: typeof LayoutUsersRoute
   LayoutIndexRoute: typeof LayoutIndexRoute
   LayoutWorkshopsWorkshopIdRoute: typeof LayoutWorkshopsWorkshopIdRoute
   LayoutWorkshopsCreateRoute: typeof LayoutWorkshopsCreateRoute
 }
 
 const LayoutRouteChildren: LayoutRouteChildren = {
+  LayoutTemplatesRoute: LayoutTemplatesRoute,
+  LayoutUsersRoute: LayoutUsersRoute,
   LayoutIndexRoute: LayoutIndexRoute,
   LayoutWorkshopsWorkshopIdRoute: LayoutWorkshopsWorkshopIdRoute,
   LayoutWorkshopsCreateRoute: LayoutWorkshopsCreateRoute,

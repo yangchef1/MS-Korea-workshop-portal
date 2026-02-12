@@ -37,8 +37,8 @@ Exception Hierarchy:
     │       │   ├── RoleAssignmentError
     │       │   └── DeploymentError
     │       ├── StorageServiceError
-    │       │   ├── BlobNotFoundError (404)
-    │       │   └── ContainerNotFoundError (404)
+    │       │   ├── EntityNotFoundError (404)
+    │       │   └── TableNotFoundError (404)
     │       ├── EntraIDServiceError (formerly AzureADServiceError)
     │       │   ├── EntraIDAuthorizationError (403)
     │       │   ├── UserCreationError
@@ -74,8 +74,8 @@ from .azure import (
     RoleAssignmentError,
     DeploymentError,
     StorageServiceError,
-    BlobNotFoundError,
-    ContainerNotFoundError,
+    EntityNotFoundError,
+    TableNotFoundError,
     EntraIDServiceError,
     EntraIDAuthorizationError,
     UserCreationError,
@@ -116,8 +116,8 @@ __all__ = [
     "RoleAssignmentError",
     "DeploymentError",
     "StorageServiceError",
-    "BlobNotFoundError",
-    "ContainerNotFoundError",
+    "EntityNotFoundError",
+    "TableNotFoundError",
     "EntraIDServiceError",
     "EntraIDAuthorizationError",
     "UserCreationError",

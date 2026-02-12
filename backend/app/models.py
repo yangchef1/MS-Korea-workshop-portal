@@ -1,18 +1,38 @@
-"""
-Pydantic models for request/response schemas
-"""
-from pydantic import BaseModel, Field
-from typing import List, Optional, Dict
+"""API 요청/응답에 사용되는 Pydantic 모델."""
+from datetime import datetime
+from enum import Enum
+from typing import Optional
+
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+
+class UserRole(str, Enum):
+    """포털 사용자 역할."""
+
+    ADMIN = "admin"
+    USER = "user"
+
+
+class PortalUser(BaseModel):
+    """Table Storage에 저장되는 포털 사용자 정보."""
+
+    user_id: str
+    name: str
+    email: str
+    role: UserRole = UserRole.USER
+    registered_at: str
 
 
 class ParticipantCreate(BaseModel):
-    """Participant data from CSV"""
+    """참가자 데이터 (CSV 파싱 결과)."""
+
     email: str
     alias: str
 
 
 class ParticipantResponse(BaseModel):
-    """Participant response with credentials"""
+    """자격 증명이 포함된 참가자 응답."""
+
     alias: str
     email: str
     upn: str
@@ -23,36 +43,99 @@ class ParticipantResponse(BaseModel):
 
 
 class PolicySettings(BaseModel):
-    """Azure Policy configuration"""
-    allowed_regions: List[str] = Field(..., min_items=1)
-    allowed_services: List[str] = Field(..., min_items=1)
+    """Azure Policy 구성."""
+
+    allowed_regions: list[str] = Field(..., min_length=1)
+    allowed_services: list[str] = Field(..., min_length=1)
 
 
 class WorkshopCreate(BaseModel):
-    """Workshop creation request"""
+    """워크샵 생성 요청."""
+
     name: str = Field(..., min_length=3, max_length=100)
-    start_date: str  # ISO format date
-    end_date: str  # ISO format date
+    start_date: str = Field(..., description="ISO 형식 날짜 (예: 2025-01-15T09:00)")
+    end_date: str = Field(..., description="ISO 형식 날짜 (예: 2025-01-15T18:00)")
     base_resources_template: str
     policy: PolicySettings
 
+    @field_validator("start_date", "end_date")
+    @classmethod
+    def validate_date_format(cls, value: str) -> str:
+        """날짜 문자열이 ISO 8601 형식인지 검증한다."""
+        try:
+            datetime.fromisoformat(value)
+        except ValueError:
+            raise ValueError(
+                f"Invalid date format: '{value}'. "
+                "Expected ISO 8601 (e.g., '2025-01-15T09:00')"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def validate_date_range(self) -> "WorkshopCreate":
+        """end_date가 start_date 이후인지 검증한다."""
+        start = datetime.fromisoformat(self.start_date)
+        end = datetime.fromisoformat(self.end_date)
+        if end <= start:
+            raise ValueError("end_date must be after start_date")
+        return self
+
+
+class ParticipantData(BaseModel):
+    """워크샵 메타데이터에 저장되는 참가자 데이터."""
+
+    alias: str
+    email: str
+    upn: str
+    password: str
+    subscription_id: str
+    resource_group: str
+    object_id: str
+
+
+class PolicyData(BaseModel):
+    """워크샵 메타데이터에 저장되는 정책 데이터."""
+
+    allowed_regions: list[str] = Field(..., min_length=1)
+    allowed_services: list[str] = Field(..., min_length=1)
+
+
+WORKSHOP_VALID_STATUSES = {"active", "completed", "deleted", "failed"}
+
 
 class WorkshopMetadata(BaseModel):
-    """Workshop metadata stored in Blob Storage"""
-    id: str
-    name: str
-    start_date: str
-    end_date: str
-    participants: List[Dict]
+    """Table Storage에 저장되는 워크샵 메타데이터.
+
+    Table Storage에는 스키마 검증이 없으므로, 저장 전에 이 모델로
+    앱 레벨 검증을 수행한다.
+    """
+
+    id: str = Field(..., min_length=1)
+    name: str = Field(..., min_length=3, max_length=100)
+    start_date: str = Field(..., min_length=1)
+    end_date: str = Field(..., min_length=1)
+    participants: list[ParticipantData] = []
     base_resources_template: str
-    policy: Dict
+    policy: PolicyData
     status: str = "active"
-    created_at: str
+    created_at: str = Field(..., min_length=1)
     created_by: Optional[str] = None
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, value: str) -> str:
+        """status 값이 허용된 상태 중 하나인지 검증한다."""
+        if value not in WORKSHOP_VALID_STATUSES:
+            raise ValueError(
+                f"Invalid status '{value}'. "
+                f"Must be one of: {WORKSHOP_VALID_STATUSES}"
+            )
+        return value
 
 
 class WorkshopResponse(BaseModel):
-    """Workshop response"""
+    """워크샵 목록 조회 응답."""
+
     id: str
     name: str
     start_date: str
@@ -65,38 +148,42 @@ class WorkshopResponse(BaseModel):
 
 
 class WorkshopDetail(BaseModel):
-    """Detailed workshop information"""
+    """워크샵 상세 정보 응답."""
+
     id: str
     name: str
     start_date: str
     end_date: str
-    participants: List[Dict]
+    participants: list[ParticipantData]
     base_resources_template: str
-    policy: Dict
+    policy: PolicyData
     status: str
     created_at: str
     total_cost: float = 0.0
     currency: str = "USD"
-    cost_breakdown: Optional[List[Dict]] = None
+    cost_breakdown: Optional[list[dict]] = None
 
 
 class CostResponse(BaseModel):
-    """Cost data response"""
+    """비용 데이터 응답."""
+
     total_cost: float
     currency: str
     period_days: int
     start_date: Optional[str] = None
     end_date: Optional[str] = None
-    breakdown: Optional[List[Dict]] = None
+    breakdown: Optional[list[dict]] = None
 
 
 class MessageResponse(BaseModel):
-    """Generic message response"""
+    """단순 메시지 응답."""
+
     message: str
     detail: Optional[str] = None
 
 
 class ErrorResponse(BaseModel):
-    """Error response"""
+    """에러 응답."""
+
     error: str
     detail: Optional[str] = None
