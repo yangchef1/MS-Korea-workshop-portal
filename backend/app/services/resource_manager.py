@@ -1,8 +1,8 @@
-"""Azure Resource Manager service for resource groups, RBAC, and ARM deployments.
+"""Azure Resource Manager 서비스 (비동기).
 
-Authentication: Uses DefaultAzureCredential (OIDC/Managed Identity)
-- Local development: Azure CLI credential (az login)
-- Production: Managed Identity assigned to App Service
+리소스 그룹, RBAC, ARM 배포를 관리한다.
+azure.mgmt.resource.aio / azure.mgmt.authorization.aio를 사용하여
+네이티브 비동기 I/O를 제공한다.
 """
 import asyncio
 import logging
@@ -10,89 +10,118 @@ import re
 import time
 import uuid
 from functools import lru_cache
-from typing import List, Dict, Optional
+from typing import Any
 
-from azure.mgmt.resource import ResourceManagementClient
-from azure.mgmt.resource.resources.models import (
-    ResourceGroup,
-    Deployment,
-    DeploymentProperties,
-    DeploymentMode,
+from azure.identity.aio import (
+    AzureCliCredential,
+    ClientSecretCredential,
+    DefaultAzureCredential,
 )
-from azure.mgmt.authorization import AuthorizationManagementClient
+from azure.mgmt.authorization.aio import AuthorizationManagementClient
 from azure.mgmt.authorization.models import RoleAssignmentCreateParameters
+from azure.mgmt.resource.resources.aio import ResourceManagementClient
+from azure.mgmt.resource.resources.models import (
+    Deployment,
+    DeploymentMode,
+    DeploymentProperties,
+    ResourceGroup,
+)
 
 from app.config import settings
-from app.services.credential import get_azure_credential
 
 logger = logging.getLogger(__name__)
 
-_resource_types_cache: Dict[str, List[Dict]] = {}
-_resource_types_cache_time: float = 0
-RESOURCE_TYPES_CACHE_TTL = 86400
+_RESOURCE_TYPES_CACHE_TTL = 86400  # 24시간
 
 
 class ResourceManagerService:
-    """Service for managing Azure resources with per-subscription support."""
+    """Azure 리소스 그룹, RBAC, ARM 배포를 관리하는 비동기 서비스.
 
-    def __init__(self):
-        """Initialize credentials for Azure Resource Manager."""
+    구독별 리소스 관리를 지원하며, azure.mgmt.resource.aio의
+    네이티브 비동기 클라이언트를 사용하여 Non-blocking I/O를 제공한다.
+    """
+
+    _resource_types_cache: dict[str, dict[str, str]] = {}
+    _resource_types_cache_time: float = 0
+    _role_definition_cache: dict[tuple[str, str], str] = {}
+
+    def __init__(self) -> None:
+        """Azure Resource Manager 서비스를 초기화한다."""
         try:
-            self._credential = get_azure_credential()
-            self._default_subscription_id = settings.azure_subscription_id
-            logger.info("Initialized Resource Manager service")
+            self._credential = self._create_credential()
+            self._default_subscription_id = settings.azure_sp_subscription_id
+            logger.info("Initialized async Resource Manager service")
         except Exception as e:
             logger.error("Failed to initialize Resource Manager client: %s", e)
             raise
 
+    @staticmethod
+    def _create_credential() -> ClientSecretCredential | DefaultAzureCredential | AzureCliCredential:
+        """설정에 따라 적절한 비동기 Azure credential을 생성한다."""
+        if settings.azure_sp_tenant_id and settings.azure_sp_client_id and settings.azure_sp_client_secret:
+            return ClientSecretCredential(
+                tenant_id=settings.azure_sp_tenant_id,
+                client_id=settings.azure_sp_client_id,
+                client_secret=settings.azure_sp_client_secret,
+            )
+        if settings.use_azure_cli_credential:
+            return AzureCliCredential()
+        return DefaultAzureCredential(
+            exclude_shared_token_cache_credential=True,
+            exclude_visual_studio_code_credential=True,
+            exclude_azure_powershell_credential=True,
+            exclude_interactive_browser_credential=True,
+        )
+
     def _get_resource_client(
-        self, subscription_id: Optional[str] = None
+        self, subscription_id: str | None = None,
     ) -> ResourceManagementClient:
-        """Get ResourceManagementClient for a specific subscription."""
+        """특정 구독의 비동기 ResourceManagementClient를 반환한다."""
         sub_id = subscription_id or self._default_subscription_id
         return ResourceManagementClient(
             credential=self._credential,
-            subscription_id=sub_id
+            subscription_id=sub_id,
+            retry_total=settings.azure_retry_total,
+            retry_backoff_factor=settings.azure_retry_backoff_factor,
         )
 
     def _get_auth_client(
-        self, subscription_id: Optional[str] = None
+        self, subscription_id: str | None = None,
     ) -> AuthorizationManagementClient:
-        """Get AuthorizationManagementClient for a specific subscription."""
+        """특정 구독의 비동기 AuthorizationManagementClient를 반환한다."""
         sub_id = subscription_id or self._default_subscription_id
         return AuthorizationManagementClient(
             credential=self._credential,
-            subscription_id=sub_id
+            subscription_id=sub_id,
+            retry_total=settings.azure_retry_total,
+            retry_backoff_factor=settings.azure_retry_backoff_factor,
         )
 
     async def create_resource_group(
         self,
         name: str,
         location: str,
-        tags: Optional[Dict[str, str]] = None,
-        subscription_id: Optional[str] = None
-    ) -> Dict:
-        """Create a resource group in a specific subscription.
+        tags: dict[str, str] | None = None,
+        subscription_id: str | None = None,
+    ) -> dict[str, Any]:
+        """특정 구독에 리소스 그룹을 생성한다.
 
         Args:
-            name: Resource group name
-            location: Azure region
-            tags: Resource tags
-            subscription_id: Target subscription ID (uses default if not provided)
+            name: 리소스 그룹 이름.
+            location: Azure 리전.
+            tags: 리소스 태그.
+            subscription_id: 대상 구독 ID. 미지정 시 기본 구독 사용.
 
         Returns:
-            Resource group details
+            리소스 그룹 상세 정보.
         """
-        def _create():
+        try:
             resource_client = self._get_resource_client(subscription_id)
             rg_params = ResourceGroup(location=location, tags=tags or {})
-            return resource_client.resource_groups.create_or_update(
+            rg = await resource_client.resource_groups.create_or_update(
                 resource_group_name=name,
-                parameters=rg_params
+                parameters=rg_params,
             )
-
-        try:
-            rg = await asyncio.to_thread(_create)
 
             logger.info(
                 "Created resource group: %s in %s (subscription: %s)",
@@ -113,16 +142,15 @@ class ResourceManagerService:
 
     async def create_resource_groups_bulk(
         self,
-        resource_groups: List[Dict]
-    ) -> List[Dict]:
-        """Create multiple resource groups (supports per-participant subscription).
+        resource_groups: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """여러 리소스 그룹을 병렬로 생성한다.
 
         Args:
-            resource_groups: List of dicts with name, location, tags, and
-                optionally subscription_id
+            resource_groups: name, location, tags, subscription_id를 포함하는 딕셔너리 목록.
 
         Returns:
-            List of created resource group details
+            성공적으로 생성된 리소스 그룹 목록.
         """
         tasks = [
             self.create_resource_group(
@@ -149,23 +177,20 @@ class ResourceManagerService:
         return created_rgs
 
     async def delete_resource_group(
-        self, name: str, subscription_id: Optional[str] = None
+        self, name: str, subscription_id: str | None = None,
     ) -> bool:
-        """Delete a resource group (async operation).
+        """리소스 그룹 삭제를 시작한다(비동기 작업).
 
         Args:
-            name: Resource group name
-            subscription_id: Target subscription ID (uses default if not provided)
+            name: 리소스 그룹 이름.
+            subscription_id: 대상 구독 ID. 미지정 시 기본 구독 사용.
 
         Returns:
-            True if deletion started
+            삭제가 시작되면 True.
         """
-        def _delete():
-            resource_client = self._get_resource_client(subscription_id)
-            return resource_client.resource_groups.begin_delete(name)
-
         try:
-            await asyncio.to_thread(_delete)
+            resource_client = self._get_resource_client(subscription_id)
+            await resource_client.resource_groups.begin_delete(name)
             logger.info(
                 "Started deletion of resource group: %s (subscription: %s)",
                 name, subscription_id or 'default'
@@ -177,15 +202,15 @@ class ResourceManagerService:
             raise
 
     async def delete_resource_groups_bulk(
-        self, resource_groups: List[Dict]
-    ) -> Dict[str, bool]:
-        """Delete multiple resource groups (supports per-participant subscription).
+        self, resource_groups: list[dict[str, Any]],
+    ) -> dict[str, bool]:
+        """여러 리소스 그룹을 병렬로 삭제한다.
 
         Args:
-            resource_groups: List of dicts with 'name' and optionally 'subscription_id'
+            resource_groups: name과 선택적 subscription_id를 포함하는 딕셔너리 목록.
 
         Returns:
-            Dictionary mapping name to deletion status
+            리소스 그룹 이름별 삭제 상태 매핑.
         """
         if resource_groups and isinstance(resource_groups[0], str):
             resource_groups = [{'name': name} for name in resource_groups]
@@ -215,35 +240,32 @@ class ResourceManagerService:
         scope: str,
         principal_id: str,
         role_name: str = "Contributor",
-        subscription_id: Optional[str] = None
-    ) -> Dict:
-        """Assign RBAC role to a principal.
+        subscription_id: str | None = None,
+    ) -> dict[str, Any]:
+        """프린시펄에 RBAC 역할을 할당한다.
 
         Args:
-            scope: Resource scope (e.g., resource group ID)
-            principal_id: Azure AD object ID
-            role_name: Role name (default: Contributor)
-            subscription_id: Target subscription ID (uses default if not provided)
+            scope: 리소스 범위 (예: 리소스 그룹 ID).
+            principal_id: Azure AD 객체 ID.
+            role_name: 역할 이름. 기본값은 Contributor.
+            subscription_id: 대상 구독 ID. 미지정 시 기본 구독 사용.
 
         Returns:
-            Role assignment details
+            역할 할당 상세 정보.
         """
-        def _assign():
+        try:
             auth_client = self._get_auth_client(subscription_id)
-            role_id = self._get_role_definition_id(role_name, subscription_id)
+            role_id = await self._get_role_definition_id(role_name, subscription_id)
             role_assignment_name = str(uuid.uuid4())
             params = RoleAssignmentCreateParameters(
                 role_definition_id=role_id,
-                principal_id=principal_id
+                principal_id=principal_id,
             )
-            return auth_client.role_assignments.create(
+            assignment = await auth_client.role_assignments.create(
                 scope=scope,
                 role_assignment_name=role_assignment_name,
-                parameters=params
+                parameters=params,
             )
-
-        try:
-            assignment = await asyncio.to_thread(_assign)
 
             logger.info(
                 "Assigned %s role to %s on %s",
@@ -261,63 +283,83 @@ class ResourceManagerService:
             logger.error("Failed to assign role: %s", e)
             raise
 
-    def _get_role_definition_id(
-        self, role_name: str, subscription_id: Optional[str] = None
+    async def _get_role_definition_id(
+        self, role_name: str, subscription_id: str | None = None,
     ) -> str:
-        """Get role definition ID by name."""
+        """역할 이름으로 역할 정의 ID를 조회한다.
+
+        OData 필터를 사용하여 서버 측에서 필터링하고,
+        클래스 레벨 캐시로 반복 조회를 방지한다.
+
+        Args:
+            role_name: Azure RBAC 역할 이름.
+            subscription_id: 대상 구독 ID.
+
+        Returns:
+            역할 정의 전체 ID.
+
+        Raises:
+            ValueError: 역할을 찾을 수 없는 경우.
+        """
         sub_id = subscription_id or self._default_subscription_id
+        cache_key = (sub_id, role_name)
+
+        cached = ResourceManagerService._role_definition_cache.get(cache_key)
+        if cached:
+            return cached
+
         scope = f"/subscriptions/{sub_id}"
         auth_client = self._get_auth_client(subscription_id)
-        
-        for role_def in auth_client.role_definitions.list(scope):
-            if role_def.role_name == role_name:
-                return role_def.id
+        odata_filter = f"roleName eq '{role_name}'"
+
+        async for role_def in auth_client.role_definitions.list(
+            scope, filter=odata_filter,
+        ):
+            ResourceManagerService._role_definition_cache[cache_key] = role_def.id
+            return role_def.id
 
         raise ValueError(f"Role '{role_name}' not found")
 
-    async def deploy_arm_template(
+    async def deploy_template(
         self,
         resource_group_name: str,
-        template: Dict,
-        parameters: Optional[Dict] = None,
-        deployment_name: Optional[str] = None,
-        subscription_id: Optional[str] = None
-    ) -> Dict:
-        """Deploy ARM template to resource group.
+        template: dict[str, Any],
+        parameters: dict[str, Any] | None = None,
+        deployment_name: str | None = None,
+        subscription_id: str | None = None,
+    ) -> dict[str, Any]:
+        """인프라 템플릿을 리소스 그룹에 배포한다.
 
         Args:
-            resource_group_name: Target resource group
-            template: ARM template JSON
-            parameters: Template parameters
-            deployment_name: Deployment name (auto-generated if not provided)
-            subscription_id: Target subscription ID (uses default if not provided)
+            resource_group_name: 대상 리소스 그룹.
+            template: 템플릿 JSON.
+            parameters: 템플릿 파라미터.
+            deployment_name: 배포 이름. 미지정 시 자동 생성.
+            subscription_id: 대상 구독 ID. 미지정 시 기본 구독 사용.
 
         Returns:
-            Deployment details
+            배포 상세 정보.
         """
         if not deployment_name:
             deployment_name = f"deployment-{uuid.uuid4().hex[:8]}"
 
-        def _deploy():
+        try:
             resource_client = self._get_resource_client(subscription_id)
             deployment_properties = DeploymentProperties(
                 mode=DeploymentMode.INCREMENTAL,
                 template=template,
-                parameters=parameters or {}
+                parameters=parameters or {},
             )
             deployment_params = Deployment(properties=deployment_properties)
-            poller = resource_client.deployments.begin_create_or_update(
+            poller = await resource_client.deployments.begin_create_or_update(
                 resource_group_name=resource_group_name,
                 deployment_name=deployment_name,
-                parameters=deployment_params
+                parameters=deployment_params,
             )
-            return poller.result()
-
-        try:
-            result = await asyncio.to_thread(_deploy)
+            result = await poller.result()
 
             logger.info(
-                "Deployed ARM template to %s: %s",
+                "Deployed template to %s: %s",
                 resource_group_name, deployment_name
             )
 
@@ -329,27 +371,24 @@ class ResourceManagerService:
             }
 
         except Exception as e:
-            logger.error("Failed to deploy ARM template: %s", e)
+            logger.error("Failed to deploy template: %s", e)
             raise
 
     async def get_resource_group(
-        self, name: str, subscription_id: Optional[str] = None
-    ) -> Optional[Dict]:
-        """Get resource group details.
+        self, name: str, subscription_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """리소스 그룹 상세 정보를 조회한다.
 
         Args:
-            name: Resource group name
-            subscription_id: Target subscription ID (uses default if not provided)
+            name: 리소스 그룹 이름.
+            subscription_id: 대상 구독 ID. 미지정 시 기본 구독 사용.
 
         Returns:
-            Resource group details or None if not found
+            리소스 그룹 상세 정보. 존재하지 않으면 None.
         """
-        def _get():
-            resource_client = self._get_resource_client(subscription_id)
-            return resource_client.resource_groups.get(name)
-
         try:
-            rg = await asyncio.to_thread(_get)
+            resource_client = self._get_resource_client(subscription_id)
+            rg = await resource_client.resource_groups.get(name)
 
             return {
                 'name': rg.name,
@@ -366,26 +405,25 @@ class ResourceManagerService:
     async def list_resources_in_group(
         self,
         resource_group_name: str,
-        subscription_id: Optional[str] = None
-    ) -> List[Dict]:
-        """List all resources in a resource group.
+        subscription_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """리소스 그룹 내 모든 리소스를 조회한다.
 
         Args:
-            resource_group_name: Resource group name
-            subscription_id: Target subscription ID (uses default if not provided)
+            resource_group_name: 리소스 그룹 이름.
+            subscription_id: 대상 구독 ID. 미지정 시 기본 구독 사용.
 
         Returns:
-            List of resources
+            리소스 목록.
         """
-        def _list():
-            resource_client = self._get_resource_client(subscription_id)
-            return list(resource_client.resources.list_by_resource_group(
-                resource_group_name=resource_group_name
-            ))
-
         try:
-            resources = await asyncio.to_thread(_list)
-            
+            resource_client = self._get_resource_client(subscription_id)
+            resources = [
+                r async for r in resource_client.resources.list_by_resource_group(
+                    resource_group_name=resource_group_name
+                )
+            ]
+
             return [
                 {
                     'id': resource.id,
@@ -405,42 +443,42 @@ class ResourceManagerService:
             return []
 
     async def get_resource_types(
-        self, namespaces: Optional[List[str]] = None
-    ) -> List[Dict]:
-        """Get available resource types from Azure Resource Providers.
+        self, namespaces: list[str] | None = None,
+    ) -> list[dict[str, str]]:
+        """Azure Resource Provider에서 사용 가능한 리소스 타입을 조회한다.
 
-        Results are cached in-memory for 24 hours.
+        결과는 클래스 레벨에서 24시간 동안 캐시된다.
 
         Args:
-            namespaces: List of provider namespaces to query
+            namespaces: 조회할 프로바이더 네임스페이스 목록.
 
         Returns:
-            List of resource types with value, label, and category
+            value, label, category를 포함하는 리소스 타입 목록.
         """
-        global _resource_types_cache, _resource_types_cache_time
-
+        cls = type(self)
         current_time = time.time()
-        if _resource_types_cache and \
-           (current_time - _resource_types_cache_time) < RESOURCE_TYPES_CACHE_TTL:
+        if cls._resource_types_cache and \
+           (current_time - cls._resource_types_cache_time) < _RESOURCE_TYPES_CACHE_TTL:
             logger.debug("Returning cached resource types")
-            return list(_resource_types_cache.values())
+            return list(cls._resource_types_cache.values())
 
         if namespaces is None:
             namespaces = settings.default_services
 
-        def _fetch():
+        try:
+            logger.info("Fetching resource types from Azure for namespaces: %s", namespaces)
             resource_client = self._get_resource_client()
-            resource_types = []
-            
+            resource_types: list[dict[str, str]] = []
+
             for namespace in namespaces:
                 try:
-                    provider = resource_client.providers.get(namespace)
+                    provider = await resource_client.providers.get(namespace)
                     category = namespace.split('.')[-1] if '.' in namespace else namespace
 
                     for rt in provider.resource_types:
                         if '/' in rt.resource_type:
                             continue
-                        
+
                         full_type = f"{namespace}/{rt.resource_type}"
                         label = rt.resource_type
                         label = re.sub(r'([a-z])([A-Z])', r'\1 \2', label)
@@ -449,36 +487,30 @@ class ResourceManagerService:
                         resource_types.append({
                             'value': full_type,
                             'label': label,
-                            'category': category
+                            'category': category,
                         })
 
                 except Exception as e:
                     logger.warning("Failed to get provider %s: %s", namespace, e)
                     continue
-            
-            return resource_types
 
-        try:
-            logger.info("Fetching resource types from Azure for namespaces: %s", namespaces)
-            resource_types = await asyncio.to_thread(_fetch)
-
-            _resource_types_cache = {rt['value']: rt for rt in resource_types}
-            _resource_types_cache_time = current_time
+            cls._resource_types_cache = {rt['value']: rt for rt in resource_types}
+            cls._resource_types_cache_time = current_time
 
             logger.info("Cached %d resource types", len(resource_types))
             return resource_types
 
         except Exception as e:
             logger.error("Failed to get resource types: %s", e)
-            if _resource_types_cache:
+            if cls._resource_types_cache:
                 logger.warning("Returning expired cache due to error")
-                return list(_resource_types_cache.values())
+                return list(cls._resource_types_cache.values())
             return []
 
 
 @lru_cache(maxsize=1)
 def get_resource_manager_service() -> ResourceManagerService:
-    """Get the ResourceManagerService singleton instance."""
+    """ResourceManagerService 싱글턴 인스턴스를 반환한다."""
     return ResourceManagerService()
 
 

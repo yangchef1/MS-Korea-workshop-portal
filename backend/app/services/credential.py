@@ -1,60 +1,67 @@
-"""
-Azure Credential Helper.
+"""Azure 인증 정보 헬퍼.
 
-Provides unified credential management for all Azure services.
-Uses DefaultAzureCredential which automatically handles:
-- Local development: Azure CLI credential (az login)
-- Production: Managed Identity assigned to App Service/Container
-- GitHub Actions: OIDC token via Federated Credential
+모든 Azure 서비스에 대한 통합된 Credential 관리를 제공한다.
+Service Principal 환경변수가 설정되면 ClientSecretCredential을 사용하고,
+그렇지 않으면 다음 순서로 자동 처리한다:
+- 로컬 개발: Azure CLI credential (``az login``)
+- 프로덕션: App Service/Container에 할당된 Managed Identity
 """
 import logging
-from azure.identity import DefaultAzureCredential, AzureCliCredential
+
+from azure.identity import (
+    AzureCliCredential,
+    ClientSecretCredential,
+    DefaultAzureCredential,
+)
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
 
-def get_azure_credential():
-    """
-    Get Azure credential for authenticating to Azure services.
-    
-    NOTE: This function creates a new credential instance each time.
-    DefaultAzureCredential and AzureCliCredential internally handle token
-    caching and refresh, so creating new instances is safe and ensures
-    fresh credentials after 'az login'.
-    
-    Uses DefaultAzureCredential which tries the following in order:
-    1. Environment variables (AZURE_CLIENT_ID, AZURE_TENANT_ID, etc.)
-    2. Managed Identity (when running in Azure)
-    3. Azure CLI (when running locally with 'az login')
-    4. Visual Studio Code / Azure PowerShell (disabled for consistency)
-    
-    For local development:
-        - Run 'az login' before starting the application
-        - Set USE_AZURE_CLI_CREDENTIAL=true in .env to use AzureCliCredential directly
-    
-    For production (App Service/Container Apps):
-        - Enable System-Assigned Managed Identity OR
-        - Assign User-Assigned Managed Identity
-        - Grant necessary RBAC roles to the identity
-    
+def _has_sp_config() -> bool:
+    """Service Principal 환경변수가 모두 설정되어 있는지 확인한다."""
+    return bool(
+        settings.azure_sp_tenant_id
+        and settings.azure_sp_client_id
+        and settings.azure_sp_client_secret
+    )
+
+
+def get_azure_credential() -> ClientSecretCredential | DefaultAzureCredential | AzureCliCredential:
+    """호출 시마다 새 Azure credential 인스턴스를 생성한다.
+
+    우선순위:
+    1. Service Principal 환경변수 설정 시 → ClientSecretCredential
+    2. USE_AZURE_CLI_CREDENTIAL=true 시 → AzureCliCredential
+    3. 그 외 → DefaultAzureCredential (Managed Identity 등)
+
     Returns:
-        Azure credential object
+        Azure credential 객체.
+
+    Raises:
+        Exception: credential 생성 실패 시.
     """
     try:
-        if settings.use_azure_cli_credential:
-            logger.debug("Using AzureCliCredential for authentication (local development mode)")
-            return AzureCliCredential()
-        else:
-            logger.debug("Using DefaultAzureCredential for authentication")
-            return DefaultAzureCredential(
-                exclude_shared_token_cache_credential=True,
-                exclude_visual_studio_code_credential=True,
-                exclude_azure_powershell_credential=True,
-                exclude_interactive_browser_credential=True,
+        if _has_sp_config():
+            logger.debug("Using ClientSecretCredential (Service Principal)")
+            return ClientSecretCredential(
+                tenant_id=settings.azure_sp_tenant_id,
+                client_id=settings.azure_sp_client_id,
+                client_secret=settings.azure_sp_client_secret,
             )
-        
+
+        if settings.use_azure_cli_credential:
+            logger.debug("Using AzureCliCredential (local development mode)")
+            return AzureCliCredential()
+
+        logger.debug("Using DefaultAzureCredential")
+        return DefaultAzureCredential(
+            exclude_shared_token_cache_credential=True,
+            exclude_visual_studio_code_credential=True,
+            exclude_azure_powershell_credential=True,
+            exclude_interactive_browser_credential=True,
+        )
     except Exception as e:
-        logger.error(f"Failed to create Azure credential: {e}")
+        logger.error("Failed to create Azure credential: %s", e)
         raise
