@@ -204,6 +204,7 @@ apiClient.interceptors.response.use(
 
 // Types for API responses
 export type UserRole = "admin" | "user"
+export type UserStatus = "active" | "pending" | "invited"
 
 export interface User {
   user_id: string
@@ -218,6 +219,7 @@ export interface PortalUser {
   name: string
   email: string
   role: UserRole
+  status: UserStatus
   registered_at: string
 }
 
@@ -284,24 +286,38 @@ export interface WorkshopCost {
   breakdown?: CostBreakdown[]
 }
 
-export interface ArmTemplate {
+/** Infrastructure template type. */
+export type TemplateType = "arm" | "bicep" | "terraform"
+
+export interface InfraTemplate {
   name: string
   description: string
   path: string
+  template_type: TemplateType
 }
 
-/** Detailed ARM template including raw JSON content. */
-export interface ArmTemplateDetail {
+/** Detailed infrastructure template including raw content. */
+export interface InfraTemplateDetail {
   name: string
   description: string
   path: string
+  template_type: TemplateType
   template_content: string
 }
 
-/** Request body for updating an ARM template. */
+/** Request body for updating a template. */
 export interface UpdateTemplateRequest {
   description?: string
+  template_type?: TemplateType
   template_content?: string
+}
+
+/** Request body for creating a new template. */
+export interface CreateTemplateRequest {
+  name: string
+  description?: string
+  template_type?: TemplateType
+  template_content: string
 }
 
 export interface ResourceType {
@@ -393,8 +409,8 @@ export const workshopApi = {
     return response.data
   },
 
-  getTemplates: async (): Promise<ArmTemplate[]> => {
-    const response = await apiClient.get<ArmTemplate[]>("/templates")
+  getTemplates: async (): Promise<InfraTemplate[]> => {
+    const response = await apiClient.get<InfraTemplate[]>("/templates")
     return response.data
   },
 
@@ -448,37 +464,48 @@ export const authApi = {
   removeUser: async (email: string): Promise<void> => {
     await apiClient.delete("/auth/users", { params: { email } })
   },
+
+  /** 초대 이메일 발송 (Admin 전용). 사용자가 이미 등록되어 있어야 한다. */
+  inviteUser: async (email: string): Promise<void> => {
+    await apiClient.post("/auth/users/invite", { email })
+  },
 }
 
 // Template API (Admin only)
 export const templateApi = {
-  /** ARM 템플릿 목록을 조회한다. */
-  list: async (): Promise<ArmTemplate[]> => {
-    const response = await apiClient.get<ArmTemplate[]>("/templates")
+  /** 인프라 템플릿 목록을 조회한다. */
+  list: async (): Promise<InfraTemplate[]> => {
+    const response = await apiClient.get<InfraTemplate[]>("/templates")
     return response.data
   },
 
-  /** ARM 템플릿 상세 정보를 조회한다. */
-  get: async (name: string): Promise<ArmTemplateDetail> => {
-    const response = await apiClient.get<ArmTemplateDetail>(
+  /** 새 인프라 템플릿을 생성한다. */
+  create: async (data: CreateTemplateRequest): Promise<InfraTemplate> => {
+    const response = await apiClient.post<InfraTemplate>("/templates", data)
+    return response.data
+  },
+
+  /** 인프라 템플릿 상세 정보를 조회한다. */
+  get: async (name: string): Promise<InfraTemplateDetail> => {
+    const response = await apiClient.get<InfraTemplateDetail>(
       `/templates/${encodeURIComponent(name)}`
     )
     return response.data
   },
 
-  /** ARM 템플릿을 수정한다. */
+  /** 인프라 템플릿을 수정한다. */
   update: async (
     name: string,
     data: UpdateTemplateRequest
-  ): Promise<ArmTemplate> => {
-    const response = await apiClient.patch<ArmTemplate>(
+  ): Promise<InfraTemplate> => {
+    const response = await apiClient.patch<InfraTemplate>(
       `/templates/${encodeURIComponent(name)}`,
       data
     )
     return response.data
   },
 
-  /** ARM 템플릿을 삭제한다. */
+  /** 인프라 템플릿을 삭제한다. */
   delete: async (name: string): Promise<void> => {
     await apiClient.delete(`/templates/${encodeURIComponent(name)}`)
   },

@@ -5,12 +5,14 @@ import { useMsal, useAccount, useIsAuthenticated } from "@azure/msal-react"
 import { InteractionStatus } from "@azure/msal-browser"
 import { useCallback, useMemo, useState, useEffect } from "react"
 import { loginRequest, graphRequest } from "@/lib/msalConfig"
+import type { UserRole } from "@/client/api"
 
 export interface MsalUser {
   user_id: string
   name: string
   email: string
   tenant_id: string
+  role: UserRole | null
   photoUrl?: string
 }
 
@@ -73,6 +75,7 @@ export function useMsalAuth() {
       name: account.name || "",
       email: account.username || "",
       tenant_id: account.tenantId || "",
+      role: null,
       photoUrl: photoUrl || undefined,
     }
   }, [account, photoUrl])
