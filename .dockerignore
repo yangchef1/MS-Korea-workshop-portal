@@ -51,9 +51,6 @@ htmlcov
 Dockerfile*
 docker-compose*
 
-# ARM templates (not needed in container)
-arm-templates/
-
 # Azure Functions (separate deployment)
 function/
 

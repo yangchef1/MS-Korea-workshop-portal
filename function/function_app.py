@@ -8,7 +8,7 @@ import json
 import asyncio
 from datetime import datetime, timezone
 from azure.identity import DefaultAzureCredential
-from azure.storage.blob import BlobServiceClient
+from azure.data.tables import TableServiceClient
 from azure.mgmt.resource import ResourceManagementClient
 from msgraph import GraphServiceClient
 import os
@@ -17,8 +17,12 @@ app = func.FunctionApp()
 
 AZURE_SUBSCRIPTION_ID = os.getenv("AZURE_SUBSCRIPTION_ID")
 AZURE_DOMAIN = os.getenv("AZURE_DOMAIN")
-BLOB_STORAGE_ACCOUNT = os.getenv("BLOB_STORAGE_ACCOUNT")
-BLOB_CONTAINER_NAME = os.getenv("BLOB_CONTAINER_NAME", "workshop-data")
+TABLE_STORAGE_ACCOUNT = os.getenv("TABLE_STORAGE_ACCOUNT")
+
+WORKSHOPS_TABLE = "workshops"
+PASSWORDS_TABLE = "passwords"
+WORKSHOP_PARTITION_KEY = "workshop"
+PASSWORD_PARTITION_KEY = "password"
 
 logger = logging.getLogger(__name__)
 
@@ -42,11 +46,12 @@ async def workshop_cleanup(timer: func.TimerRequest) -> None:
     try:
         credential = DefaultAzureCredential()
 
-        blob_service_client = BlobServiceClient(
-            account_url=f"https://{BLOB_STORAGE_ACCOUNT}.blob.core.windows.net",
+        table_service_client = TableServiceClient(
+            endpoint=f"https://{TABLE_STORAGE_ACCOUNT}.table.core.windows.net",
             credential=credential
         )
-        container_client = blob_service_client.get_container_client(BLOB_CONTAINER_NAME)
+        workshops_table = table_service_client.get_table_client(WORKSHOPS_TABLE)
+        passwords_table = table_service_client.get_table_client(PASSWORDS_TABLE)
 
         resource_client = ResourceManagementClient(
             credential=credential,
@@ -60,22 +65,25 @@ async def workshop_cleanup(timer: func.TimerRequest) -> None:
 
         today = datetime.now(timezone.utc).date()
 
-        blob_list = container_client.list_blobs(name_starts_with="workshops/")
+        query_filter = f"PartitionKey eq '{WORKSHOP_PARTITION_KEY}'"
+        entities = workshops_table.query_entities(query_filter)
         workshops_to_cleanup = []
 
-        for blob in blob_list:
-            if blob.name.endswith(".json"):
-                blob_client = container_client.get_blob_client(blob.name)
-                blob_data = blob_client.download_blob().readall()
-                workshop = json.loads(blob_data)
+        for entity in entities:
+            workshop = {
+                "id": entity["RowKey"],
+                "name": entity.get("name", ""),
+                "end_date": entity.get("end_date", ""),
+                "participants": json.loads(entity.get("participants_json", "[]")),
+            }
 
-                end_date = datetime.fromisoformat(
-                    workshop['end_date'].replace('Z', '+00:00')
-                ).date()
+            end_date = datetime.fromisoformat(
+                workshop['end_date'].replace('Z', '+00:00')
+            ).date()
 
-                if end_date < today:
-                    logger.info(f"Workshop {workshop['name']} (ID: {workshop['id']}) is expired")
-                    workshops_to_cleanup.append(workshop)
+            if end_date < today:
+                logger.info(f"Workshop {workshop['name']} (ID: {workshop['id']}) is expired")
+                workshops_to_cleanup.append(workshop)
 
         if not workshops_to_cleanup:
             logger.info("No expired workshops found")
@@ -89,7 +97,8 @@ async def workshop_cleanup(timer: func.TimerRequest) -> None:
                 workshop,
                 resource_client,
                 graph_client,
-                container_client
+                workshops_table,
+                passwords_table
             )
             cleanup_results.append(result)
 
@@ -105,19 +114,21 @@ async def cleanup_workshop(
     workshop: dict,
     resource_client: ResourceManagementClient,
     graph_client: GraphServiceClient,
-    container_client
+    workshops_table,
+    passwords_table
 ) -> dict:
     """
-    Cleanup a single workshop and its resources
+    Cleanup a single workshop and its resources.
 
     Args:
-        workshop: Workshop metadata
-        resource_client: Azure Resource Manager client
-        graph_client: Microsoft Graph client
-        container_client: Blob Storage container client
+        workshop: Workshop metadata.
+        resource_client: Azure Resource Manager client.
+        graph_client: Microsoft Graph client.
+        workshops_table: Table client for workshops table.
+        passwords_table: Table client for passwords table.
 
     Returns:
-        Dictionary with cleanup results
+        Dictionary with cleanup results.
     """
     workshop_id = workshop['id']
     workshop_name = workshop['name']
@@ -156,16 +167,20 @@ async def cleanup_workshop(
                     result['errors'].append(f"User deletion failed: {upns[i]}")
 
         try:
-            metadata_blob = container_client.get_blob_client(f"workshops/{workshop_id}.json")
-            metadata_blob.delete_blob()
+            workshops_table.delete_entity(
+                partition_key=WORKSHOP_PARTITION_KEY,
+                row_key=workshop_id,
+            )
             logger.info(f"Deleted workshop metadata: {workshop_id}")
 
             try:
-                passwords_blob = container_client.get_blob_client(f"workshops/{workshop_id}-passwords.csv")
-                passwords_blob.delete_blob()
-                logger.info(f"Deleted passwords CSV: {workshop_id}")
+                passwords_table.delete_entity(
+                    partition_key=PASSWORD_PARTITION_KEY,
+                    row_key=workshop_id,
+                )
+                logger.info(f"Deleted passwords entity: {workshop_id}")
             except Exception as e:
-                logger.warning(f"Failed to delete passwords CSV: {e}")
+                logger.warning(f"Failed to delete passwords entity: {e}")
 
         except Exception as e:
             logger.error(f"Failed to delete workshop metadata: {e}")

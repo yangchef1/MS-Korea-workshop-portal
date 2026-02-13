@@ -91,10 +91,6 @@ MS-workshop-portal/
 │   ├── package.json
 │   ├── vite.config.ts
 │   └── .env.example
-├── arm-templates/              # ARM templates
-│   ├── compute-basic.json
-│   ├── vnet-basic.json
-│   └── vnet-advanced.json
 ├── function/                   # Azure Function (cleanup)
 │   ├── function_app.py         # Timer trigger function
 │   ├── host.json
@@ -164,8 +160,7 @@ AZURE_TENANT_ID=your-tenant-id
 AZURE_CLIENT_ID=your-client-id
 AZURE_DOMAIN=yourdomain.onmicrosoft.com
 AZURE_SUBSCRIPTION_ID=your-subscription-id
-BLOB_STORAGE_ACCOUNT=your-storage-account
-BLOB_CONTAINER_NAME=workshop-data
+TABLE_STORAGE_ACCOUNT=your-storage-account
 USE_AZURE_CLI_CREDENTIAL=true  # For local development
 SESSION_SECRET_KEY=your-secret-key
 ```
@@ -304,12 +299,6 @@ This will:
 - Verify function has access to blob storage and subscription
 
 ## Development
-
-### Adding New ARM Templates
-
-1. Create ARM template JSON in `arm-templates/`
-2. Upload to blob storage under `templates/`
-3. Template automatically appears in UI
 
 ### Running Tests
 
