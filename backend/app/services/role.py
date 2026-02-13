@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from typing import Any, Optional
 
 from app.exceptions import NotFoundError
-from app.models import UserRole
+from app.models import UserRole, UserStatus
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +65,15 @@ class RoleService:
             stored_user["name"] = user_info["name"]
             needs_update = True
 
+        # 미활성 사용자가 처음 로그인하면 active로 전환
+        if stored_user.get("status") in (
+            UserStatus.INVITED.value,
+            UserStatus.PENDING.value,
+        ):
+            stored_user["status"] = UserStatus.ACTIVE.value
+            needs_update = True
+            logger.info("Activated user: %s", email)
+
         if needs_update:
             try:
                 await self.storage.save_portal_user(stored_user)
@@ -91,6 +100,7 @@ class RoleService:
             "name": name,
             "email": email.strip().lower(),
             "role": role,
+            "status": UserStatus.PENDING.value,
             "registered_at": datetime.now(UTC).isoformat(),
         }
         await self.storage.save_portal_user(user_data)

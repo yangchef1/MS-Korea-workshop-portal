@@ -1,25 +1,39 @@
-"""Email service for sending workshop credentials to participants.
+"""워크샵 참가자에게 자격 증명을 전송하는 이메일 서비스.
 
-Supports multiple email providers:
-- Azure Communication Services (recommended for Azure environments)
-- SMTP (fallback for other environments)
+지원 제공자:
+- Azure Communication Services (Azure 환경 권장)
+- SMTP (기타 환경 대체)
 """
+import asyncio
 import logging
 import smtplib
 from dataclasses import dataclass
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from functools import lru_cache
-from typing import List, Dict
+from pathlib import Path
+
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Rate limiting 지연 (초)
+_SEND_DELAY_SECONDS = 0.5
+
+# Jinja2 템플릿 환경 (모듈 레벨에서 한 번만 초기화)
+_TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
+_jinja_env = Environment(
+    loader=FileSystemLoader(_TEMPLATES_DIR),
+    autoescape=select_autoescape(["html"]),
+)
+
 
 @dataclass
 class EmailMessage:
-    """Email message structure"""
+    """이메일 메시지 구조체."""
+
     to: str
     subject: str
     body_html: str
@@ -27,158 +41,84 @@ class EmailMessage:
 
 
 class EmailService:
-    """Service for sending emails to workshop participants"""
+    """워크샵 참가자에게 이메일을 전송하는 서비스."""
 
-    def __init__(self):
-        """Initialize email service based on configuration"""
-        self._sender_email = getattr(settings, 'email_sender', None)
-        self._smtp_host = getattr(settings, 'smtp_host', None)
-        self._smtp_port = getattr(settings, 'smtp_port', 587)
-        self._smtp_username = getattr(settings, 'smtp_username', None)
-        self._smtp_password = getattr(settings, 'smtp_password', None)
-        self._acs_connection_string = getattr(settings, 'acs_connection_string', None)
-        
+    def __init__(self) -> None:
+        """설정에 기반하여 이메일 서비스를 초기화한다."""
+        self._sender_email = settings.email_sender
+        self._smtp_host = settings.smtp_host
+        self._smtp_port = settings.smtp_port
+        self._smtp_username = settings.smtp_username
+        self._smtp_password = settings.smtp_password
+        self._acs_connection_string = settings.acs_connection_string
+
         logger.info("Initialized Email service")
 
     def _generate_credential_email(
         self,
-        participant: Dict,
-        workshop_name: str
+        participant: dict,
+        workshop_name: str,
     ) -> EmailMessage:
-        """
-        Generate credential email for a participant
-        
+        """참가자용 자격 증명 이메일을 생성한다.
+
+        Jinja2 템플릿 파일(credential_email.html, credential_email.txt)을
+        사용하여 이메일 본문을 렌더링한다.
+
         Args:
-            participant: Participant data with email, upn, password, etc.
-            workshop_name: Name of the workshop
-            
+            participant: email, upn, password 등을 포함한 참가자 데이터.
+            workshop_name: 워크샵 이름.
+
         Returns:
-            EmailMessage with HTML and text content
+            HTML 및 텍스트 본문을 포함한 EmailMessage.
         """
-        email = participant.get('email', '')
-        alias = participant.get('alias', '')
-        upn = participant.get('upn', '')
-        password = participant.get('password', '')
-        subscription_id = participant.get('subscription_id', '')
-        resource_group = participant.get('resource_group', '')
-        
-        subject = f"[{workshop_name}] Azure Workshop 계정 정보"
-        
-        # Use .format() instead of f-string to avoid issues with CSS braces
-        body_html = """
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; }
-        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-        .header { background: linear-gradient(135deg, #0078d4 0%, #00bcf2 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
-        .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 8px 8px; }
-        .credential-box { background: white; border: 1px solid #e1e1e1; border-radius: 8px; padding: 20px; margin: 20px 0; }
-        .credential-item { margin: 15px 0; }
-        .credential-label { font-weight: 600; color: #666; font-size: 12px; text-transform: uppercase; }
-        .credential-value { font-family: 'Consolas', monospace; background: #f0f0f0; padding: 10px; border-radius: 4px; margin-top: 5px; word-break: break-all; }
-        .warning { background: #fff4ce; border-left: 4px solid #ffc107; padding: 15px; margin: 20px 0; }
-        .portal-link { display: inline-block; background: #0078d4; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px; margin-top: 20px; }
-        .portal-link:hover { background: #106ebe; }
-        .footer { text-align: center; margin-top: 30px; color: #666; font-size: 12px; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>🎓 {workshop_name}</h1>
-            <p>Azure Workshop 계정 정보</p>
-        </div>
-        <div class="content">
-            <p>안녕하세요, <strong>{alias}</strong>님!</p>
-            <p>Azure Workshop에 참가해 주셔서 감사합니다. 아래 계정 정보로 Azure Portal에 로그인하실 수 있습니다.</p>
-            
-            <div class="credential-box">
-                <div class="credential-item">
-                    <div class="credential-label">로그인 ID (UPN)</div>
-                    <div class="credential-value">{upn}</div>
-                </div>
-                <div class="credential-item">
-                    <div class="credential-label">임시 비밀번호</div>
-                    <div class="credential-value">{password}</div>
-                </div>
-                <div class="credential-item">
-                    <div class="credential-label">할당된 Subscription ID</div>
-                    <div class="credential-value">{subscription_id}</div>
-                </div>
-                <div class="credential-item">
-                    <div class="credential-label">Resource Group</div>
-                    <div class="credential-value">{resource_group}</div>
-                </div>
-            </div>
-            
-            <div class="warning">
-                <strong>⚠️ 중요:</strong> 첫 로그인 시 비밀번호를 변경해야 합니다. 안전한 비밀번호를 사용해 주세요.
-            </div>
-            
-            <center>
-                <a href="https://portal.azure.com" class="portal-link">Azure Portal 접속하기 →</a>
-            </center>
-            
-            <div class="footer">
-                <p>문의사항이 있으시면 워크샵 진행자에게 연락해 주세요.</p>
-                <p>© Microsoft Azure Workshop Portal</p>
-            </div>
-        </div>
-    </div>
-</body>
-</html>
-""".format(
-            workshop_name=workshop_name,
-            alias=alias,
-            upn=upn,
-            password=password,
-            subscription_id=subscription_id,
-            resource_group=resource_group
-        )
-        
-        body_text = f"""
-{workshop_name} - Azure Workshop 계정 정보
+        template_context = {
+            "workshop_name": workshop_name,
+            "alias": participant.get("alias", ""),
+            "email": participant.get("email", ""),
+            "upn": participant.get("upn", ""),
+            "password": participant.get("password", ""),
+            "subscription_id": participant.get("subscription_id", ""),
+            "resource_group": participant.get("resource_group", ""),
+            # Optional branding / layout variables (Jinja2 default filters handle missing)
+            "logo_url": participant.get("logo_url", ""),
+            "logo_alt": participant.get("logo_alt", ""),
+            "logo_width": participant.get("logo_width", ""),
+            "header_bg_color": participant.get("header_bg_color", ""),
+            "cta_color": participant.get("cta_color", ""),
+            "cta_url": participant.get("cta_url", ""),
+            "cta_text": participant.get("cta_text", ""),
+            "contact_text": participant.get("contact_text", ""),
+            "contact_email": participant.get("contact_email", ""),
+            "disclaimer": participant.get("disclaimer", ""),
+            "copyright": participant.get("copyright", ""),
+        }
 
-안녕하세요, {alias}님!
+        html_template = _jinja_env.get_template("credential_email.html")
+        text_template = _jinja_env.get_template("credential_email.txt")
 
-Azure Workshop에 참가해 주셔서 감사합니다. 아래 계정 정보로 Azure Portal에 로그인하실 수 있습니다.
-
-=== 계정 정보 ===
-로그인 ID (UPN): {upn}
-임시 비밀번호: {password}
-할당된 Subscription ID: {subscription_id}
-Resource Group: {resource_group}
-
-⚠️ 중요: 첫 로그인 시 비밀번호를 변경해야 합니다.
-
-Azure Portal: https://portal.azure.com
-
-문의사항이 있으시면 워크샵 진행자에게 연락해 주세요.
-"""
-        
         return EmailMessage(
-            to=email,
-            subject=subject,
-            body_html=body_html,
-            body_text=body_text
+            to=template_context["email"],
+            subject=f"[{workshop_name}] Azure Workshop 계정 정보",
+            body_html=html_template.render(**template_context),
+            body_text=text_template.render(**template_context),
         )
 
     async def send_email_smtp(self, message: EmailMessage) -> bool:
-        """Send email via SMTP.
-        
+        """SMTP를 통해 이메일을 전송한다.
+
         Args:
-            message: EmailMessage to send
-            
+            message: 전송할 EmailMessage.
+
         Returns:
-            True if sent successfully
+            전송 성공 시 True.
         """
-        if not all([
-            self._smtp_host, self._smtp_username,
-            self._smtp_password, self._sender_email
-        ]):
+        required_fields = [
+            self._smtp_host,
+            self._smtp_username,
+            self._smtp_password,
+            self._sender_email,
+        ]
+        if not all(required_fields):
             logger.error("SMTP configuration is incomplete")
             return False
         
@@ -207,13 +147,13 @@ Azure Portal: https://portal.azure.com
             return False
 
     async def send_email_acs(self, message: EmailMessage) -> bool:
-        """Send email via Azure Communication Services.
-        
+        """Azure Communication Services를 통해 이메일을 전송한다.
+
         Args:
-            message: EmailMessage to send
-            
+            message: 전송할 EmailMessage.
+
         Returns:
-            True if sent successfully
+            전송 성공 시 True.
         """
         if not self._acs_connection_string:
             logger.error("ACS connection string is not configured")
@@ -254,20 +194,69 @@ Azure Portal: https://portal.azure.com
 
     async def send_credentials_email(
         self,
-        participant: Dict,
-        workshop_name: str
+        participant: dict,
+        workshop_name: str,
     ) -> bool:
-        """Send credential email to a participant.
-        
+        """참가자에게 자격 증명 이메일을 전송한다.
+
+        ACS가 설정되어 있으면 ACS를, 그 다음 SMTP를 시도한다.
+
         Args:
-            participant: Participant data
-            workshop_name: Workshop name
-            
+            participant: 참가자 데이터.
+            workshop_name: 워크샵 이름.
+
         Returns:
-            True if sent successfully
+            전송 성공 시 True.
         """
         message = self._generate_credential_email(participant, workshop_name)
-        
+        return await self._send_email(message)
+
+    async def send_invitation_email(
+        self,
+        email: str,
+        role: str,
+        inviter_name: str,
+        portal_url: str,
+    ) -> bool:
+        """포털 초대 이메일을 전송한다.
+
+        Args:
+            email: 초대할 사용자 이메일.
+            role: 부여된 역할 ("admin" 또는 "user").
+            inviter_name: 초대하는 관리자 이름.
+            portal_url: 포털 접속 URL.
+
+        Returns:
+            전송 성공 시 True.
+        """
+        role_label = "관리자" if role == "admin" else "사용자"
+        template_context = {
+            "email": email,
+            "role_label": role_label,
+            "inviter_name": inviter_name or "관리자",
+            "portal_url": portal_url,
+        }
+
+        html_template = _jinja_env.get_template("invitation_email.html")
+        text_template = _jinja_env.get_template("invitation_email.txt")
+
+        message = EmailMessage(
+            to=email,
+            subject="[Azure Workshop Portal] 포털 초대",
+            body_html=html_template.render(**template_context),
+            body_text=text_template.render(**template_context),
+        )
+        return await self._send_email(message)
+
+    async def _send_email(self, message: EmailMessage) -> bool:
+        """설정된 제공자(ACS 또는 SMTP)를 통해 이메일을 전송한다.
+
+        Args:
+            message: 전송할 EmailMessage.
+
+        Returns:
+            전송 성공 시 True.
+        """
         if self._acs_connection_string:
             return await self.send_email_acs(message)
         elif self._smtp_host:
@@ -278,31 +267,28 @@ Azure Portal: https://portal.azure.com
 
     async def send_credentials_bulk(
         self,
-        participants: List[Dict],
-        workshop_name: str
-    ) -> Dict[str, bool]:
-        """
-        Send credential emails to multiple participants
-        
+        participants: list[dict],
+        workshop_name: str,
+    ) -> dict[str, bool]:
+        """여러 참가자에게 자격 증명 이메일을 순차 전송한다.
+
+        Rate limiting을 위해 각 전송 사이에 지연을 둔다.
+
         Args:
-            participants: List of participant data
-            workshop_name: Workshop name
-            
+            participants: 참가자 데이터 목록.
+            workshop_name: 워크샵 이름.
+
         Returns:
-            Dictionary mapping email to send status
+            이메일 주소를 키로, 전송 성공 여부를 값으로 가진 딕셔너리.
         """
-        import asyncio
-        
         results = {}
-        
+
         for participant in participants:
-            email = participant.get('email', '')
+            email = participant.get("email", "")
             success = await self.send_credentials_email(participant, workshop_name)
             results[email] = success
-            
-            # Small delay to avoid rate limiting
-            await asyncio.sleep(0.5)
-        
+            await asyncio.sleep(_SEND_DELAY_SECONDS)
+
         successful = sum(1 for v in results.values() if v)
         logger.info(
             "Sent %d/%d credential emails for workshop: %s",
@@ -314,7 +300,7 @@ Azure Portal: https://portal.azure.com
 
 @lru_cache(maxsize=1)
 def get_email_service() -> EmailService:
-    """Get the EmailService singleton instance."""
+    """EmailService 싱글턴 인스턴스를 반환한다."""
     return EmailService()
 
 

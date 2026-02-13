@@ -13,6 +13,14 @@ class UserRole(str, Enum):
     USER = "user"
 
 
+class UserStatus(str, Enum):
+    """포털 사용자 상태."""
+
+    ACTIVE = "active"
+    PENDING = "pending"
+    INVITED = "invited"
+
+
 class PortalUser(BaseModel):
     """Table Storage에 저장되는 포털 사용자 정보."""
 
@@ -20,6 +28,7 @@ class PortalUser(BaseModel):
     name: str
     email: str
     role: UserRole = UserRole.USER
+    status: UserStatus = UserStatus.ACTIVE
     registered_at: str
 
 

@@ -1,15 +1,13 @@
-"""CSV parsing utilities for participant data."""
+"""CSV 파싱 유틸리티."""
 import csv
 import io
-import re
 import logging
-from typing import List, Dict
+import re
 
 from fastapi import UploadFile
 
 from app.exceptions import (
     CSVParsingError,
-    MissingFieldError,
     InvalidFormatError,
     UnsupportedFileTypeError,
 )
@@ -18,49 +16,57 @@ logger = logging.getLogger(__name__)
 
 
 def extract_alias_from_email(email: str) -> str:
-    """Extract alias from email address.
-    
+    """이메일 주소에서 alias를 추출한다.
+
     Args:
-        email: Email address (e.g., johndoe@domain.com)
-    
+        email: 이메일 주소 (예: johndoe@domain.com)
+
     Returns:
-        Alias part (e.g., johndoe)
+        alias 부분 (예: johndoe)
     """
     return email.split('@')[0].lower()
 
 
 def validate_email(email: str) -> bool:
-    """Validate email format.
-    
+    """이메일 형식을 검증한다.
+
     Args:
-        email: Email address to validate
-    
+        email: 검증할 이메일 주소
+
     Returns:
-        True if valid email format
+        유효한 이메일 형식이면 True
     """
     email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
     return bool(re.match(email_pattern, email))
 
 
-async def parse_participants_csv(file: UploadFile) -> List[Dict[str, str]]:
-    """Parse uploaded CSV file containing participant data with subscription assignments.
+async def parse_participants_csv(file: UploadFile) -> list[dict[str, str]]:
+    """업로드된 CSV 파일에서 참가자 이메일 목록을 파싱한다.
 
-    Expected CSV format:
-        email,subscription_id
-        johndoe@company.com,xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-        janedoe@company.com,yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy
+    단일 컬럼(이메일만) CSV를 지원한다. 헤더가 있는 경우('email')와
+    없는 경우(바로 이메일 나열) 모두 처리 가능하다.
+
+    Expected CSV format::
+
+        email
+        johndoe@company.com
+        janedoe@company.com
+
+    Or without header::
+
+        johndoe@company.com
+        janedoe@company.com
 
     Args:
-        file: Uploaded CSV file
+        file: 업로드된 CSV 파일
 
     Returns:
-        List of participant dictionaries with 'alias', 'email', and 'subscription_id' keys
+        'alias'와 'email' 키를 가진 참가자 딕셔너리 리스트
 
     Raises:
-        UnsupportedFileTypeError: If file is not a CSV
-        MissingFieldError: If required columns are missing
-        InvalidFormatError: If data format is invalid
-        CSVParsingError: If CSV parsing fails
+        UnsupportedFileTypeError: CSV 파일이 아닌 경우
+        InvalidFormatError: 데이터 형식이 유효하지 않은 경우
+        CSVParsingError: CSV 파싱에 실패한 경우
     """
     if not file.filename.endswith('.csv'):
         raise UnsupportedFileTypeError(
@@ -79,29 +85,27 @@ async def parse_participants_csv(file: UploadFile) -> List[Dict[str, str]]:
         )
 
     try:
-        csv_reader = csv.DictReader(io.StringIO(decoded_content))
+        lines = [
+            line.strip()
+            for line in decoded_content.strip().splitlines()
+            if line.strip()
+        ]
 
-        if 'email' not in csv_reader.fieldnames:
-            raise MissingFieldError(
-                "CSV must contain 'email' column",
-                field="email"
+        if not lines:
+            raise CSVParsingError(
+                "CSV file is empty or contains no valid participants"
             )
-        
-        if 'subscription_id' not in csv_reader.fieldnames:
-            raise MissingFieldError(
-                "CSV must contain 'subscription_id' column",
-                field="subscription_id"
-            )
+
+        # 첫 줄이 헤더('email')인 경우 건너뛴다
+        start_index = 0
+        if lines[0].lower().replace('"', '').replace("'", '') == 'email':
+            start_index = 1
 
         participants = []
-        guid_pattern = re.compile(
-            r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-'
-            r'[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
-        )
-        
-        for row_num, row in enumerate(csv_reader, start=2):
-            email = row.get('email', '').strip()
-            subscription_id = row.get('subscription_id', '').strip()
+
+        for row_num, line in enumerate(lines[start_index:], start=start_index + 1):
+            # CSV 형식이므로 콤마 기준 첫 번째 값만 사용
+            email = line.split(',')[0].strip().strip('"').strip("'")
 
             if not email:
                 raise InvalidFormatError(
@@ -116,33 +120,19 @@ async def parse_participants_csv(file: UploadFile) -> List[Dict[str, str]]:
                     field="email",
                     expected_format="user@domain.com"
                 )
-            
+
             alias = extract_alias_from_email(email)
-            
+
             if not alias.replace('-', '').replace('_', '').replace('.', '').isalnum():
                 raise InvalidFormatError(
                     f"Invalid alias '{alias}' extracted from email at row {row_num}",
                     field="email",
                     expected_format="alphanumeric with dots, hyphens, underscores"
                 )
-            
-            if not subscription_id:
-                raise MissingFieldError(
-                    f"Empty subscription_id found at row {row_num}",
-                    field="subscription_id"
-                )
-            
-            if not guid_pattern.match(subscription_id):
-                raise InvalidFormatError(
-                    f"Invalid subscription_id format at row {row_num}",
-                    field="subscription_id",
-                    expected_format="GUID (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)"
-                )
 
             participants.append({
                 'alias': alias,
                 'email': email.lower(),
-                'subscription_id': subscription_id.lower()
             })
 
         if not participants:
@@ -155,7 +145,7 @@ async def parse_participants_csv(file: UploadFile) -> List[Dict[str, str]]:
             raise CSVParsingError(
                 "Duplicate aliases found in CSV (emails have same prefix)"
             )
-        
+
         emails = [p['email'] for p in participants]
         if len(emails) != len(set(emails)):
             raise CSVParsingError("Duplicate emails found in CSV")
@@ -163,20 +153,20 @@ async def parse_participants_csv(file: UploadFile) -> List[Dict[str, str]]:
         logger.info("Parsed %d participants from CSV", len(participants))
         return participants
 
-    except csv.Error as e:
+    except (csv.Error, ValueError) as e:
         logger.error("CSV parsing error: %s", e)
         raise CSVParsingError(f"CSV parsing error: {e}")
 
 
-def generate_passwords_csv(participants: List[Dict]) -> str:
-    """Generate CSV content with participant credentials.
+def generate_passwords_csv(participants: list[dict[str, str]]) -> str:
+    """참가자 인증정보 CSV 콘텐츠를 생성한다.
 
     Args:
-        participants: List of participant dicts with alias, email, upn,
-            password, subscription_id
+        participants: alias, email, upn, password, subscription_id를 포함하는
+            참가자 딕셔너리 목록.
 
     Returns:
-        CSV content as string
+        CSV 문자열.
     """
     output = io.StringIO()
     fieldnames = ['email', 'alias', 'upn', 'password', 'subscription_id', 'resource_group']
