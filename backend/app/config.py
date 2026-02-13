@@ -9,18 +9,22 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     """Application settings loaded from environment variables"""
 
+    # MSAL / JWT 검증용 (Microsoft 테넌트)
     azure_tenant_id: str = os.getenv("AZURE_TENANT_ID", "")
-    azure_domain: str = os.getenv("AZURE_DOMAIN", "yourdomain.com")
-    azure_subscription_id: str = os.getenv("AZURE_SUBSCRIPTION_ID", "")
-
     azure_client_id: str = os.getenv("AZURE_CLIENT_ID", "")
     azure_redirect_uri: str = os.getenv("AZURE_REDIRECT_URI", "http://localhost:5173")
 
+    # Service Principal (Azure 리소스 운영 테넌트)
+    azure_sp_tenant_id: str = os.getenv("AZURE_SP_TENANT_ID", "")
+    azure_sp_client_id: str = os.getenv("AZURE_SP_CLIENT_ID", "")
+    azure_sp_client_secret: str = os.getenv("AZURE_SP_CLIENT_SECRET", "")
+    azure_sp_domain: str = os.getenv("AZURE_SP_DOMAIN", "yourdomain.com")
+    azure_sp_subscription_id: str = os.getenv("AZURE_SP_SUBSCRIPTION_ID", "")
+
     session_secret_key: str = os.getenv("SESSION_SECRET_KEY", "change-this-secret-key-in-production")
 
-    blob_storage_account: str = os.getenv("BLOB_STORAGE_ACCOUNT", "workshopstorage")
-    blob_container_name: str = os.getenv("BLOB_CONTAINER_NAME", "workshop-data")
-    
+    table_storage_account: str = os.getenv("TABLE_STORAGE_ACCOUNT", "workshopstorage")
+
     use_azure_cli_credential: bool = os.getenv("USE_AZURE_CLI_CREDENTIAL", "false").lower() == "true"
 
     # Email settings (Azure Communication Services or SMTP)
@@ -120,9 +124,15 @@ class Settings(BaseSettings):
     default_user_role: str = "Contributor"
     resource_group_prefix: str = "rg-workshop"
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
+    # Logging: "json" for production (Azure Monitor), "text" for development
+    log_format: str = "text"
+    log_level: str = "INFO"
+
+    # Azure SDK retry
+    azure_retry_total: int = 3
+    azure_retry_backoff_factor: float = 1.0
+
+    model_config = {"env_file": ".env", "case_sensitive": False, "extra": "ignore"}
 
 
 settings = Settings()

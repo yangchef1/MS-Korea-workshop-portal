@@ -10,6 +10,7 @@ from .base import (
     AuthorizationError,
     NotFoundError,
     ServiceError,
+    ValidationError,
 )
 
 
@@ -100,7 +101,7 @@ class RoleAssignmentError(ResourceManagerError):
 
 
 class DeploymentError(ResourceManagerError):
-    """ARM template deployment failed"""
+    """Infrastructure template deployment failed"""
     
     def __init__(self, message: str = "Deployment failed", deployment_name: str = None):
         super().__init__(message)
@@ -117,23 +118,23 @@ class StorageServiceError(AzureServiceError):
         self.code = "STORAGE_SERVICE_ERROR"
 
 
-class BlobNotFoundError(StorageServiceError, NotFoundError):
-    """Blob was not found in storage"""
-    
-    def __init__(self, message: str = "Blob not found", blob_name: str = None):
+class EntityNotFoundError(StorageServiceError, NotFoundError):
+    """Table entity was not found in storage."""
+
+    def __init__(self, message: str = "Entity not found", table_name: str = None, row_key: str = None):
         AppError.__init__(
-            self, message, "BLOB_NOT_FOUND", 404,
-            {"resource_type": "Blob", "blob_name": blob_name}
+            self, message, "ENTITY_NOT_FOUND", 404,
+            {"resource_type": "TableEntity", "table_name": table_name, "row_key": row_key}
         )
 
 
-class ContainerNotFoundError(StorageServiceError, NotFoundError):
-    """Storage container was not found"""
-    
-    def __init__(self, message: str = "Container not found", container_name: str = None):
+class TableNotFoundError(StorageServiceError, NotFoundError):
+    """Storage table was not found."""
+
+    def __init__(self, message: str = "Table not found", table_name: str = None):
         AppError.__init__(
-            self, message, "CONTAINER_NOT_FOUND", 404,
-            {"resource_type": "Container", "container_name": container_name}
+            self, message, "TABLE_NOT_FOUND", 404,
+            {"resource_type": "Table", "table_name": table_name}
         )
 
 
