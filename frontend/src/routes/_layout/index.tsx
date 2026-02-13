@@ -59,7 +59,7 @@ function WorkshopCard({ workshop }: { workshop: Workshop }) {
             </div>
             <div className="flex items-center gap-1">
               <Calendar className="h-4 w-4" />
-              {new Date(workshop.start_date).toLocaleDateString()}
+              {new Date(workshop.start_date).toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
             </div>
           </div>
         </CardContent>
@@ -73,23 +73,21 @@ function WorkshopsListContent() {
 
   if (!workshops || workshops.length === 0) {
     return (
-      <Card className="p-12">
-        <div className="flex flex-col items-center justify-center text-center">
-          <div className="rounded-full bg-muted p-4 mb-4">
-            <Calendar className="h-8 w-8 text-muted-foreground" />
-          </div>
-          <h3 className="text-lg font-semibold">워크샵이 없습니다</h3>
-          <p className="text-muted-foreground mb-4">
-            새 워크샵을 만들어 시작하세요
-          </p>
-          <Link to="/workshops/create">
-            <Button>
-              <Plus className="h-4 w-4 mr-2" />
-              워크샵 만들기
-            </Button>
-          </Link>
+      <div className="flex flex-col items-center justify-center text-center py-12">
+        <div className="rounded-full bg-muted p-4 mb-4">
+          <Calendar className="h-8 w-8 text-muted-foreground" />
         </div>
-      </Card>
+        <h3 className="text-lg font-semibold">워크샵이 없습니다</h3>
+        <p className="text-muted-foreground mb-4">
+          새 워크샵을 만들어 시작하세요
+        </p>
+        <Link to="/workshops/create">
+          <Button>
+            <Plus className="h-4 w-4 mr-2" />
+            워크샵 만들기
+          </Button>
+        </Link>
+      </div>
     )
   }
 
@@ -104,25 +102,43 @@ function WorkshopsListContent() {
 
 function WorkshopsList() {
   return (
-    <Suspense
-      fallback={
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {[1, 2, 3].map((i) => (
-            <Card key={i} className="animate-pulse">
-              <CardHeader>
-                <div className="h-6 bg-muted rounded w-3/4"></div>
-                <div className="h-4 bg-muted rounded w-1/2 mt-2"></div>
-              </CardHeader>
-              <CardContent>
-                <div className="h-4 bg-muted rounded w-full"></div>
-              </CardContent>
-            </Card>
-          ))}
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between space-y-0">
+        <div>
+          <CardTitle>워크샵 목록</CardTitle>
+          <CardDescription>
+            등록된 워크샵을 확인하고 관리합니다.
+          </CardDescription>
         </div>
-      }
-    >
-      <WorkshopsListContent />
-    </Suspense>
+        <Link to="/workshops/create">
+          <Button>
+            <Plus className="h-4 w-4 mr-2" />
+            워크샵 만들기
+          </Button>
+        </Link>
+      </CardHeader>
+      <CardContent>
+        <Suspense
+          fallback={
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+              {[1, 2, 3].map((i) => (
+                <Card key={i} className="animate-pulse">
+                  <CardHeader>
+                    <div className="h-6 bg-muted rounded w-3/4"></div>
+                    <div className="h-4 bg-muted rounded w-1/2 mt-2"></div>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="h-4 bg-muted rounded w-full"></div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          }
+        >
+          <WorkshopsListContent />
+        </Suspense>
+      </CardContent>
+    </Card>
   )
 }
 
@@ -140,18 +156,9 @@ function Dashboard() {
             Azure Workshop Portal에 오신 것을 환영합니다
           </p>
         </div>
-        <Link to="/workshops/create">
-          <Button>
-            <Plus className="h-4 w-4 mr-2" />
-            새 워크샵
-          </Button>
-        </Link>
       </div>
 
-      <div>
-        <h2 className="text-xl font-semibold mb-4">워크샵 목록</h2>
-        <WorkshopsList />
-      </div>
+      <WorkshopsList />
     </div>
   )
 }

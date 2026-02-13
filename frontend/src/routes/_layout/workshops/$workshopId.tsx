@@ -326,7 +326,7 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
                 <span className="text-sm">기간</span>
               </div>
               <p className="text-xl font-semibold">
-                {new Date(workshop.start_date).toLocaleDateString()} ~ {new Date(workshop.end_date).toLocaleDateString()}
+                {new Date(workshop.start_date).toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })} ~ {new Date(workshop.end_date).toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
               </p>
             </div>
           </CardContent>
@@ -383,7 +383,7 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
             <CardHeader>
               <CardTitle>비용 분석</CardTitle>
               <CardDescription>
-                워크샵 기간({new Date(workshop.start_date).toLocaleDateString('ko-KR')} ~ {new Date(workshop.end_date).toLocaleDateString('ko-KR')}) 동안의 비용 현황입니다
+                워크샵 기간({new Date(workshop.start_date).toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })} ~ {new Date(workshop.end_date).toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}) 동안의 비용 현황입니다
               </CardDescription>
             </CardHeader>
             <CardContent>

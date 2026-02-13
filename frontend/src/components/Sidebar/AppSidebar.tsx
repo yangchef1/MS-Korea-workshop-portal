@@ -1,5 +1,5 @@
 import { Link as RouterLink, useRouterState } from "@tanstack/react-router"
-import { Home, Plus, LogOut, ChevronUp, Shield, Users, FileCode } from "lucide-react"
+import { Home, LogOut, ChevronUp, Shield, Users, FileCode } from "lucide-react"
 import azureLogo from "@/assets/azure-logo.svg"
 
 import {
@@ -34,7 +34,6 @@ interface MenuItem {
 
 const menuItems: MenuItem[] = [
   { icon: Home, title: "홈", path: "/" },
-  { icon: Plus, title: "워크샵 만들기", path: "/workshops/create" },
   { icon: Users, title: "유저 관리", path: "/users", adminOnly: true },
   { icon: FileCode, title: "템플릿 관리", path: "/templates", adminOnly: true },
 ]

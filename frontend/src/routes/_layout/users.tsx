@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router"
 import { useState, useEffect, useCallback } from "react"
-import { UserPlus, Trash2, Shield, User } from "lucide-react"
+import { UserPlus, Trash2, Shield, User, Mail, MoreVertical } from "lucide-react"
 
 import { authApi, type PortalUser, type UserRole } from "@/client"
 import useAuth from "@/hooks/useAuth"
@@ -16,9 +16,18 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import {
@@ -30,7 +39,6 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
 
 export const Route = createFileRoute("/_layout/users")({
@@ -48,6 +56,14 @@ const ROLE_LABELS: Record<UserRole, string> = {
   admin: "관리자",
   user: "사용자",
 }
+
+/** Pending badge style. */
+const PENDING_BADGE_STYLE =
+  "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400"
+
+/** Invited badge style. */
+const INVITED_BADGE_STYLE =
+  "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-300"
 
 // ---------------------------------------------------------------------------
 // Custom hook: useUsers
@@ -88,34 +104,44 @@ function useUsers(): UseUsersResult {
 }
 
 // ---------------------------------------------------------------------------
-// Add‑user dialog (inline card)
+// Add‑user dialog (modal)
 // ---------------------------------------------------------------------------
 
-interface AddUserFormProps {
-  onSubmit: (email: string, role: UserRole, name: string) => void
-  onCancel: () => void
+interface AddUserDialogProps {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onSubmit: (email: string, role: UserRole, name: string, sendInvite: boolean) => void
 }
 
-/** Inline form for adding a new portal user. */
-function AddUserForm({ onSubmit, onCancel }: AddUserFormProps) {
+/** Modal dialog for adding a new portal user. */
+function AddUserDialog({ open, onOpenChange, onSubmit }: AddUserDialogProps) {
   const [email, setEmail] = useState("")
   const [name, setName] = useState("")
   const [role, setRole] = useState<UserRole>("user")
+  const [sendInvite, setSendInvite] = useState(true)
+
+  const resetForm = () => {
+    setEmail("")
+    setName("")
+    setRole("user")
+    setSendInvite(true)
+  }
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    onSubmit(email.trim(), role, name.trim())
+    onSubmit(email.trim(), role, name.trim(), sendInvite)
+    resetForm()
   }
 
   return (
-    <Card className="mb-6">
-      <CardHeader>
-        <CardTitle className="text-lg">새 사용자 추가</CardTitle>
-        <CardDescription>포털에 새 사용자를 추가합니다.</CardDescription>
-      </CardHeader>
-      <CardContent>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>새 사용자 추가</DialogTitle>
+          <DialogDescription>포털에 새 사용자를 추가합니다.</DialogDescription>
+        </DialogHeader>
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-          <div className="grid gap-4 sm:grid-cols-3">
+          <div className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="add-email">이메일</Label>
               <Input
@@ -148,7 +174,7 @@ function AddUserForm({ onSubmit, onCancel }: AddUserFormProps) {
                     {ROLE_LABELS[role]}
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent>
+                <DropdownMenuContent align="start">
                   <DropdownMenuItem onClick={() => setRole("user")}>
                     <User className="mr-2 h-4 w-4" />
                     사용자
@@ -161,15 +187,24 @@ function AddUserForm({ onSubmit, onCancel }: AddUserFormProps) {
               </DropdownMenu>
             </div>
           </div>
-          <div className="flex gap-2 justify-end">
-            <Button type="button" variant="ghost" onClick={onCancel}>
-              취소
-            </Button>
-            <Button type="submit">추가</Button>
+          <div className="flex items-center gap-2">
+            <input
+              id="send-invite"
+              type="checkbox"
+              checked={sendInvite}
+              onChange={(e) => setSendInvite(e.target.checked)}
+              className="h-4 w-4 rounded border-input accent-primary"
+            />
+            <Label htmlFor="send-invite" className="text-sm font-normal cursor-pointer">
+              초대 메일 발송
+            </Label>
           </div>
+          <DialogFooter>
+            <Button type="submit">사용자 추가</Button>
+          </DialogFooter>
         </form>
-      </CardContent>
-    </Card>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -182,16 +217,39 @@ interface UserRowProps {
   currentEmail: string | undefined
   onRoleChange: (email: string, newRole: UserRole) => void
   onDelete: (email: string) => void
+  onResendInvite: (email: string) => void
 }
 
 /** Single row in the user table. */
-function UserRow({ portalUser, currentEmail, onRoleChange, onDelete }: UserRowProps) {
+function UserRow({ portalUser, currentEmail, onRoleChange, onDelete, onResendInvite }: UserRowProps) {
   const isSelf = portalUser.email === currentEmail
   const nextRole: UserRole = portalUser.role === "admin" ? "user" : "admin"
+  const [showRoleDialog, setShowRoleDialog] = useState(false)
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false)
+  const isInvited = portalUser.status === "invited"
+  const isPending = portalUser.status === "pending"
 
   return (
     <tr className="border-b last:border-b-0 hover:bg-muted/50 transition-colors">
-      <td className="px-4 py-3 text-sm">{portalUser.name || "-"}</td>
+      <td className="px-4 py-3 text-sm">
+        <span className="flex items-center gap-2">
+          {portalUser.name || "-"}
+          {portalUser.status === "pending" && (
+            <span
+              className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${PENDING_BADGE_STYLE}`}
+            >
+              대기 중
+            </span>
+          )}
+          {portalUser.status === "invited" && (
+            <span
+              className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${INVITED_BADGE_STYLE}`}
+            >
+              초대됨
+            </span>
+          )}
+        </span>
+      </td>
       <td className="px-4 py-3 text-sm">{portalUser.email}</td>
       <td className="px-4 py-3 text-sm">
         <span
@@ -208,72 +266,93 @@ function UserRow({ portalUser, currentEmail, onRoleChange, onDelete }: UserRowPr
         })}
       </td>
       <td className="px-4 py-3 text-sm">
-        <div className="flex items-center gap-2">
-          <AlertDialog>
-            <AlertDialogTrigger asChild>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={isSelf}
-                title={isSelf ? "자기 자신의 역할은 변경할 수 없습니다" : `역할을 ${ROLE_LABELS[nextRole]}(으)로 변경`}
-              >
-                {nextRole === "admin" ? (
-                  <Shield className="h-3.5 w-3.5 mr-1" />
-                ) : (
-                  <User className="h-3.5 w-3.5 mr-1" />
-                )}
-                {ROLE_LABELS[nextRole]}
-              </Button>
-            </AlertDialogTrigger>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>권한 변경</AlertDialogTitle>
-                <AlertDialogDescription>
-                  <strong>{portalUser.name || portalUser.email}</strong>의 역할을{" "}
-                  <strong>{ROLE_LABELS[portalUser.role]}</strong>에서{" "}
-                  <strong>{ROLE_LABELS[nextRole]}</strong>(으)로 변경하시겠습니까?
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>취소</AlertDialogCancel>
-                <AlertDialogAction onClick={() => onRoleChange(portalUser.email, nextRole)}>
-                  변경
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8"
+              disabled={isSelf}
+              title={isSelf ? "자기 자신은 수정할 수 없습니다" : "작업 선택"}
+            >
+              <MoreVertical className="h-4 w-4" />
+              <span className="sr-only">작업 메뉴 열기</span>
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {(isInvited || isPending) && (
+              <>
+                <DropdownMenuItem onClick={() => onResendInvite(portalUser.email)}>
+                  <Mail className="mr-2 h-4 w-4" />
+                  {isPending ? "초대 메일 발송" : "초대 메일 재발송"}
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+              </>
+            )}
+            <DropdownMenuItem onClick={() => setShowRoleDialog(true)}>
+              {nextRole === "admin" ? (
+                <Shield className="mr-2 h-4 w-4" />
+              ) : (
+                <User className="mr-2 h-4 w-4" />
+              )}
+              {ROLE_LABELS[nextRole]}(으)로 변경
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              className="text-destructive focus:text-destructive"
+              onClick={() => setShowDeleteDialog(true)}
+            >
+              <Trash2 className="mr-2 h-4 w-4" />
+              삭제
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
 
-          <AlertDialog>
-            <AlertDialogTrigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={isSelf}
-                title={isSelf ? "자기 자신은 삭제할 수 없습니다" : "사용자 삭제"}
+        <AlertDialog open={showRoleDialog} onOpenChange={setShowRoleDialog}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>권한 변경</AlertDialogTitle>
+              <AlertDialogDescription>
+                <strong>{portalUser.name || portalUser.email}</strong>의 역할을{" "}
+                <strong>{ROLE_LABELS[portalUser.role]}</strong>에서{" "}
+                <strong>{ROLE_LABELS[nextRole]}</strong>(으)로 변경하시겠습니까?
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>취소</AlertDialogCancel>
+              <AlertDialogAction onClick={() => {
+                onRoleChange(portalUser.email, nextRole)
+                setShowRoleDialog(false)
+              }}>
+                변경
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>사용자 삭제</AlertDialogTitle>
+              <AlertDialogDescription>
+                <strong>{portalUser.name || portalUser.email}</strong> 사용자를
+                정말 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>취소</AlertDialogCancel>
+              <AlertDialogAction
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                onClick={() => {
+                  onDelete(portalUser.email)
+                  setShowDeleteDialog(false)
+                }}
               >
-                <Trash2 className="h-3.5 w-3.5 text-destructive" />
-              </Button>
-            </AlertDialogTrigger>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>사용자 삭제</AlertDialogTitle>
-                <AlertDialogDescription>
-                  <strong>{portalUser.name || portalUser.email}</strong> 사용자를
-                  정말 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>취소</AlertDialogCancel>
-                <AlertDialogAction
-                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                  onClick={() => onDelete(portalUser.email)}
-                >
-                  삭제
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-        </div>
+                삭제
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </td>
     </tr>
   )
@@ -288,7 +367,7 @@ function UserManagementPage() {
   const { user, isLoading: authLoading } = useAuth()
   const { users, isLoading, refetch } = useUsers()
   const { showSuccessToast, showErrorToast } = useCustomToast()
-  const [showAddForm, setShowAddForm] = useState(false)
+  const [showAddDialog, setShowAddDialog] = useState(false)
 
   const isAdmin = user?.role === "admin"
 
@@ -315,14 +394,33 @@ function UserManagementPage() {
     )
   }
 
-  const handleAddUser = async (email: string, role: UserRole, name: string) => {
+  const handleAddUser = async (
+    email: string,
+    role: UserRole,
+    name: string,
+    sendInvite: boolean,
+  ) => {
     try {
       await authApi.addUser(email, role, name)
-      showSuccessToast(`${email} 사용자가 추가되었습니다.`)
-      setShowAddForm(false)
+      if (sendInvite) {
+        await authApi.inviteUser(email)
+        showSuccessToast(`${email} 사용자가 추가되고 초대 메일이 발송되었습니다.`)
+      } else {
+        showSuccessToast(`${email} 사용자가 추가되었습니다.`)
+      }
+      setShowAddDialog(false)
       refetch()
     } catch {
       showErrorToast("사용자 추가에 실패했습니다.")
+    }
+  }
+
+  const handleResendInvite = async (email: string) => {
+    try {
+      await authApi.inviteUser(email)
+      showSuccessToast(`${email}으로 초대 메일이 재발송되었습니다.`)
+    } catch {
+      showErrorToast("초대 메일 발송에 실패했습니다.")
     }
   }
 
@@ -348,34 +446,31 @@ function UserManagementPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">유저 관리</h1>
-          <p className="text-muted-foreground">
-            포털 사용자를 관리합니다.
-          </p>
-        </div>
-        {!showAddForm && (
-          <Button onClick={() => setShowAddForm(true)}>
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">유저 관리</h1>
+        <p className="text-muted-foreground">
+          포털 사용자를 관리합니다.
+        </p>
+      </div>
+
+      <AddUserDialog
+        open={showAddDialog}
+        onOpenChange={setShowAddDialog}
+        onSubmit={handleAddUser}
+      />
+
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0">
+          <div>
+            <CardTitle>사용자 목록</CardTitle>
+            <CardDescription>
+              총 {users.length}명의 사용자가 등록되어 있습니다.
+            </CardDescription>
+          </div>
+          <Button onClick={() => setShowAddDialog(true)}>
             <UserPlus className="h-4 w-4 mr-2" />
             사용자 추가
           </Button>
-        )}
-      </div>
-
-      {showAddForm && (
-        <AddUserForm
-          onSubmit={handleAddUser}
-          onCancel={() => setShowAddForm(false)}
-        />
-      )}
-
-      <Card>
-        <CardHeader>
-          <CardTitle>사용자 목록</CardTitle>
-          <CardDescription>
-            총 {users.length}명의 사용자가 등록되어 있습니다.
-          </CardDescription>
         </CardHeader>
         <CardContent>
           {isLoading ? (
@@ -397,7 +492,7 @@ function UserManagementPage() {
                     <th className="px-4 py-3">이메일</th>
                     <th className="px-4 py-3">역할</th>
                     <th className="px-4 py-3">등록일</th>
-                    <th className="px-4 py-3">액션</th>
+                    <th className="px-4 py-3 w-12"><span className="sr-only">작업</span></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -408,6 +503,7 @@ function UserManagementPage() {
                       currentEmail={user?.email}
                       onRoleChange={handleRoleChange}
                       onDelete={handleDeleteUser}
+                      onResendInvite={handleResendInvite}
                     />
                   ))}
                 </tbody>

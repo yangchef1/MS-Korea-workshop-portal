@@ -1,10 +1,11 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import { useMutation, useQuery } from "@tanstack/react-query"
-import { useState } from "react"
+import { useState, useEffect, useRef } from "react"
 import { ArrowLeft, Upload, Plus, Trash2, X } from "lucide-react"
 import { Link } from "@tanstack/react-router"
 
 import { workshopApi, type CreateWorkshopRequest } from "@/client"
+import useAuth from "@/hooks/useAuth"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -22,7 +23,7 @@ export const Route = createFileRoute("/_layout/workshops/create")({
 })
 
 interface ParticipantInput {
-  alias: string
+  email: string
 }
 
 // Default selected resource types for new workshops
@@ -39,21 +40,20 @@ const defaultSelectedResourceTypes = [
 function CreateWorkshop() {
   const navigate = useNavigate()
   const { showSuccessToast, showErrorToast } = useCustomToast()
+  const { isAuthenticated } = useAuth()
 
   const [formData, setFormData] = useState({
     name: "",
     region: "koreacentral",
     start_date: "",
     end_date: "",
-    arm_template: "",
+    infra_template: "",
   })
 
-  const [selectedServices, setSelectedServices] = useState<string[]>(
-    defaultSelectedResourceTypes
-  )
+  const [selectedServices, setSelectedServices] = useState<string[]>([])
 
   const [participants, setParticipants] = useState<ParticipantInput[]>([
-    { alias: "" },
+    { email: "" },
   ])
 
   // Korea regions + Early access regions where new features are deployed first
@@ -69,12 +69,27 @@ function CreateWorkshop() {
   const { data: templates = [] } = useQuery({
     queryKey: ["workshop-templates"],
     queryFn: workshopApi.getTemplates,
+    enabled: isAuthenticated,
   })
 
   const { data: resourceTypes = [] } = useQuery({
     queryKey: ["workshop-resource-types"],
     queryFn: workshopApi.getResourceTypes,
+    enabled: isAuthenticated,
   })
+
+  // API 데이터 도착 시 default 선택을 실제 리소스 타입에 맞춰 동기화
+  const hasInitializedDefaults = useRef(false)
+  useEffect(() => {
+    if (resourceTypes.length > 0 && !hasInitializedDefaults.current) {
+      const availableValues = new Set(resourceTypes.map((rt) => rt.value))
+      const matched = defaultSelectedResourceTypes.filter((v) =>
+        availableValues.has(v)
+      )
+      setSelectedServices(matched)
+      hasInitializedDefaults.current = true
+    }
+  }, [resourceTypes])
 
   // 카테고리별로 그룹화
   const groupedResourceTypes = resourceTypes.reduce((acc, resource) => {
@@ -100,7 +115,7 @@ function CreateWorkshop() {
     e.preventDefault()
 
     const validParticipants = participants.filter(
-      (p) => p.alias.trim()
+      (p) => p.email.trim()
     )
 
     if (validParticipants.length === 0) {
@@ -108,8 +123,8 @@ function CreateWorkshop() {
       return
     }
 
-    // 참가자 데이터를 CSV Blob으로 변환
-    const csvContent = "alias\n" + validParticipants.map(p => p.alias.trim()).join("\n")
+    // 참가자 이메일을 CSV Blob으로 변환
+    const csvContent = "email\n" + validParticipants.map(p => p.email.trim()).join("\n")
     const csvBlob = new Blob([csvContent], { type: "text/csv" })
     const csvFile = new File([csvBlob], "participants.csv", { type: "text/csv" })
 
@@ -117,7 +132,7 @@ function CreateWorkshop() {
       name: formData.name,
       start_date: formData.start_date,
       end_date: formData.end_date,
-      base_resources_template: formData.arm_template || "none",
+      base_resources_template: formData.infra_template || "none",
       allowed_regions: formData.region,
       allowed_services: selectedServices.join(","),
       participants_file: csvFile,
@@ -125,7 +140,7 @@ function CreateWorkshop() {
   }
 
   const addParticipant = () => {
-    setParticipants([...participants, { alias: "" }])
+    setParticipants([...participants, { email: "" }])
   }
 
   const removeParticipant = (index: number) => {
@@ -137,7 +152,7 @@ function CreateWorkshop() {
     value: string
   ) => {
     const updated = [...participants]
-    updated[index].alias = value
+    updated[index].email = value
     setParticipants(updated)
   }
 
@@ -150,14 +165,14 @@ function CreateWorkshop() {
       const text = event.target?.result as string
       const lines = text.split("\n").filter((line) => line.trim())
 
-      // Skip header if present (alias 컬럼)
-      const startIndex = lines[0]?.toLowerCase().includes("alias") ? 1 : 0
+      // Skip header if present (email 컬럼)
+      const startIndex = lines[0]?.toLowerCase().includes("email") ? 1 : 0
 
       const newParticipants: ParticipantInput[] = []
       for (let i = startIndex; i < lines.length; i++) {
-        const alias = lines[i].split(",")[0]?.trim()
-        if (alias) {
-          newParticipants.push({ alias })
+        const email = lines[i].split(",")[0]?.trim()
+        if (email) {
+          newParticipants.push({ email })
         }
       }
 
@@ -286,10 +301,10 @@ function CreateWorkshop() {
 
             <div className="grid gap-4 md:grid-cols-2">
               <div className="space-y-2">
-                <Label htmlFor="start_date">시작일 *</Label>
+                <Label htmlFor="start_date">시작 일시 *</Label>
                 <Input
                   id="start_date"
-                  type="date"
+                  type="datetime-local"
                   value={formData.start_date}
                   onChange={(e) =>
                     setFormData({ ...formData, start_date: e.target.value })
@@ -298,10 +313,10 @@ function CreateWorkshop() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="end_date">종료일 *</Label>
+                <Label htmlFor="end_date">종료 일시 *</Label>
                 <Input
                   id="end_date"
-                  type="date"
+                  type="datetime-local"
                   value={formData.end_date}
                   onChange={(e) =>
                     setFormData({ ...formData, end_date: e.target.value })
@@ -313,12 +328,12 @@ function CreateWorkshop() {
 
             {templates && templates.length > 0 && (
               <div className="space-y-2">
-                <Label htmlFor="arm_template">ARM 템플릿</Label>
+                <Label htmlFor="infra_template">인프라 템플릿</Label>
                 <select
-                  id="arm_template"
-                  value={formData.arm_template}
+                  id="infra_template"
+                  value={formData.infra_template}
                   onChange={(e) =>
-                    setFormData({ ...formData, arm_template: e.target.value })
+                    setFormData({ ...formData, infra_template: e.target.value })
                   }
                   className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 >
@@ -377,8 +392,9 @@ function CreateWorkshop() {
               {participants.map((participant, index) => (
                 <div key={index} className="flex gap-3 items-center">
                   <Input
-                    placeholder="alias (예: johndoe)"
-                    value={participant.alias}
+                    type="email"
+                    placeholder="이메일 (예: johndoe@company.com)"
+                    value={participant.email}
                     onChange={(e) =>
                       updateParticipant(index, e.target.value)
                     }
