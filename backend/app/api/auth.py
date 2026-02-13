@@ -2,7 +2,12 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, EmailStr
 
-from app.core.deps import get_current_user, get_role_service, require_admin
+from app.core.deps import (
+    get_current_user,
+    get_email_service,
+    get_role_service,
+    require_admin,
+)
 
 router = APIRouter(prefix="/auth")
 
@@ -39,6 +44,7 @@ class PortalUserResponse(BaseModel):
     name: str
     email: str
     role: str
+    status: str = "active"
     registered_at: str
 
 
@@ -86,6 +92,60 @@ async def add_user(
         email=body.email, role=body.role, name=body.name
     )
     return PortalUserResponse(**user_data)
+
+
+class InviteRequest(BaseModel):
+    """초대 이메일 발송 요청."""
+
+    email: EmailStr
+
+
+@router.post("/users/invite", status_code=200)
+async def invite_user(
+    body: InviteRequest,
+    request: Request,
+    _admin=Depends(require_admin),
+    role_svc=Depends(get_role_service),
+    email_svc=Depends(get_email_service),
+):
+    """등록된 사용자에게 초대 이메일을 발송한다 (Admin 전용).
+
+    사용자가 존재하는지 확인 후 포털 접속 링크가 포함된 초대 이메일을 발송한다.
+    신규 초대 및 재발송 모두 이 엔드포인트를 사용한다.
+
+    Args:
+        body: 초대할 사용자 이메일.
+    """
+    normalized = body.email.strip().lower()
+    stored_user = await role_svc.storage.get_portal_user(normalized)
+    if not stored_user:
+        raise HTTPException(
+            status_code=404,
+            detail=f"User '{body.email}' not found. Add user first.",
+        )
+
+    inviter = get_current_user(request)
+    inviter_name = inviter.get("name", "") if inviter else ""
+    portal_url = request.base_url._url.rstrip("/")
+
+    sent = await email_svc.send_invitation_email(
+        email=normalized,
+        role=stored_user.get("role", "user"),
+        inviter_name=inviter_name,
+        portal_url=portal_url,
+    )
+
+    if not sent:
+        raise HTTPException(
+            status_code=502,
+            detail="Failed to send invitation email. Check email provider configuration.",
+        )
+
+    # 이메일 발송 성공 시 상태를 invited로 갱신
+    stored_user["status"] = "invited"
+    await role_svc.storage.save_portal_user(stored_user)
+
+    return {"message": f"Invitation email sent to {normalized}"}
 
 
 @router.delete("/users", status_code=204)
