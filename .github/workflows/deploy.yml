@@ -6,7 +6,6 @@ on:
       - main
     paths-ignore:
       - '**.md'
-      - 'arm-templates/**'
       - 'function/**'
   pull_request:
     branches:
