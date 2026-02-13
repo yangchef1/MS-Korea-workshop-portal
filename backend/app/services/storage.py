@@ -320,6 +320,7 @@ class StorageService:
                 "user_id": user_data.get("user_id", ""),
                 "name": user_data.get("name", ""),
                 "role": user_data.get("role", "user"),
+                "status": user_data.get("status", "active"),
                 "registered_at": user_data.get("registered_at", ""),
             }
             await table_client.upsert_entity(entity)
@@ -351,6 +352,7 @@ class StorageService:
                 "name": entity.get("name", ""),
                 "email": entity["RowKey"],
                 "role": entity.get("role", "user"),
+                "status": entity.get("status", "active"),
                 "registered_at": entity.get("registered_at", ""),
             }
         except ResourceNotFoundError:
@@ -399,6 +401,7 @@ class StorageService:
                     "name": e.get("name", ""),
                     "email": e["RowKey"],
                     "role": e.get("role", "user"),
+                    "status": e.get("status", "active"),
                     "registered_at": e.get("registered_at", ""),
                 }
                 async for e in table_client.query_entities(query_filter)
@@ -412,11 +415,66 @@ class StorageService:
             raise
 
     # ------------------------------------------------------------------
-    # ARM Templates
+    # Templates
     # ------------------------------------------------------------------
 
-    async def list_arm_templates(self) -> list[dict[str, str]]:
-        """사용 가능한 ARM 템플릿 목록을 조회한다.
+    async def create_template(
+        self,
+        name: str,
+        description: str,
+        template_content: str,
+        template_type: str = "arm",
+    ) -> dict[str, str]:
+        """새 인프라 템플릿을 생성한다.
+
+        Args:
+            name: 템플릿 이름 (RowKey로 사용).
+            description: 템플릿 설명.
+            template_content: 템플릿 콘텐츠 문자열.
+            template_type: 템플릿 유형 (arm, bicep, terraform).
+
+        Returns:
+            생성된 템플릿 정보 딕셔너리.
+
+        Raises:
+            ConflictError: 동일 이름의 템플릿이 이미 존재하는 경우.
+        """
+        from app.exceptions import ConflictError
+
+        await self._ensure_tables_exist()
+
+        table_client = self.table_service_client.get_table_client(TEMPLATES_TABLE)
+
+        # Check for duplicate name
+        try:
+            await table_client.get_entity(
+                partition_key=TEMPLATE_PARTITION_KEY,
+                row_key=name,
+            )
+            raise ConflictError(f"Template '{name}' already exists")
+        except ResourceNotFoundError:
+            pass  # Expected – template does not exist yet
+
+        entity = {
+            "PartitionKey": TEMPLATE_PARTITION_KEY,
+            "RowKey": name,
+            "description": description,
+            "path": name,
+            "template_type": template_type,
+            "template_content": template_content,
+        }
+        await table_client.create_entity(entity)
+        logger.info("Created template: %s (type=%s)", name, template_type)
+
+        return {
+            "name": name,
+            "description": description,
+            "path": name,
+            "template_type": template_type,
+        }
+
+    async def list_templates(self) -> list[dict[str, str]]:
+        """사용 가능한 인프라 템플릿 목록을 조회한다.
 
         Returns:
             템플릿 정보 딕셔너리 목록.
@@ -432,22 +490,23 @@ class StorageService:
                     "name": e["RowKey"],
                     "description": e.get("description", ""),
                     "path": e.get("path", e["RowKey"]),
+                    "template_type": e.get("template_type", "arm"),
                 }
                 async for e in table_client.query_entities(query_filter)
             ]
             return sorted(templates, key=lambda x: x["name"])
         except Exception as e:
-            logger.error("Failed to list ARM templates: %s", e)
+            logger.error("Failed to list templates: %s", e)
             raise
 
-    async def get_arm_template(self, template_name: str) -> dict[str, Any] | None:
-        """ARM 템플릿 콘텐츠를 조회한다.
+    async def get_template(self, template_name: str) -> dict[str, Any] | None:
+        """템플릿 콘텐츠를 조회한다.
 
         Args:
             template_name: 템플릿 파일명 (RowKey로 사용).
 
         Returns:
-            ARM 템플릿 JSON. 존재하지 않으면 None.
+            파싱된 템플릿 JSON. 존재하지 않으면 None.
         """
 
         await self._ensure_tables_exist()
@@ -460,14 +519,14 @@ class StorageService:
             )
             return json.loads(entity.get("template_content", "{}"))
         except ResourceNotFoundError:
-            logger.warning("ARM template not found: %s", template_name)
+            logger.warning("Template not found: %s", template_name)
             return None
         except Exception as e:
-            logger.error("Failed to retrieve ARM template: %s", e)
+            logger.error("Failed to retrieve template: %s", e)
             raise
 
-    async def get_arm_template_detail(self, template_name: str) -> dict[str, Any] | None:
-        """ARM 템플릿 메타데이터와 콘텐츠를 함께 조회한다.
+    async def get_template_detail(self, template_name: str) -> dict[str, Any] | None:
+        """템플릿 메타데이터와 콘텐츠를 함께 조회한다.
 
         Args:
             template_name: 템플릿 이름 (RowKey).
@@ -487,26 +546,29 @@ class StorageService:
                 "name": entity["RowKey"],
                 "description": entity.get("description", ""),
                 "path": entity.get("path", entity["RowKey"]),
+                "template_type": entity.get("template_type", "arm"),
                 "template_content": entity.get("template_content", "{}"),
             }
         except ResourceNotFoundError:
             return None
         except Exception as e:
-            logger.error("Failed to get ARM template detail '%s': %s", template_name, e)
+            logger.error("Failed to get template detail '%s': %s", template_name, e)
             raise
 
-    async def update_arm_template(
+    async def update_template(
         self,
         template_name: str,
         description: str | None = None,
         template_content: str | None = None,
+        template_type: str | None = None,
     ) -> dict[str, str]:
-        """기존 ARM 템플릿의 메타데이터 또는 콘텐츠를 업데이트한다.
+        """기존 템플릿의 메타데이터 또는 콘텐츠를 업데이트한다.
 
         Args:
             template_name: 업데이트할 템플릿 이름 (RowKey).
             description: 새 설명. None이면 변경하지 않음.
-            template_content: 새 JSON 콘텐츠 문자열. None이면 변경하지 않음.
+            template_content: 새 콘텐츠 문자열. None이면 변경하지 않음.
+            template_type: 새 템플릿 유형. None이면 변경하지 않음.
 
         Returns:
             업데이트된 템플릿 정보 딕셔너리.
@@ -527,25 +589,28 @@ class StorageService:
             )
         except ResourceNotFoundError:
             raise EntityNotFoundError(
-                f"ARM template '{template_name}' not found"
+                f"Template '{template_name}' not found"
             )
 
         if description is not None:
             entity["description"] = description
         if template_content is not None:
             entity["template_content"] = template_content
+        if template_type is not None:
+            entity["template_type"] = template_type
 
         await table_client.update_entity(entity, mode="merge")
-        logger.info("Updated ARM template: %s", template_name)
+        logger.info("Updated template: %s", template_name)
 
         return {
             "name": entity["RowKey"],
             "description": entity.get("description", ""),
             "path": entity.get("path", entity["RowKey"]),
+            "template_type": entity.get("template_type", "arm"),
         }
 
-    async def delete_arm_template(self, template_name: str) -> None:
-        """ARM 템플릿을 삭제한다.
+    async def delete_template(self, template_name: str) -> None:
+        """인프라 템플릿을 삭제한다.
 
         Args:
             template_name: 삭제할 템플릿 이름 (RowKey).
@@ -566,14 +631,14 @@ class StorageService:
             )
         except ResourceNotFoundError:
             raise EntityNotFoundError(
-                f"ARM template '{template_name}' not found"
+                f"Template '{template_name}' not found"
             )
 
         await table_client.delete_entity(
             partition_key=TEMPLATE_PARTITION_KEY,
             row_key=template_name,
         )
-        logger.info("Deleted ARM template: %s", template_name)
+        logger.info("Deleted template: %s", template_name)
 
 
 # ------------------------------------------------------------------
