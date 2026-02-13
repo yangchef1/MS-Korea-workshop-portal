@@ -1,179 +1,287 @@
+"""워크샵 API 라우터.
+
+워크샵 생명주기(생성, 조회, 삭제)와 관련 리소스(비용, 비밀번호, 이메일)를
+관리하는 엔드포인트를 제공한다.
 """
-Workshop API routes
-"""
+import asyncio
 import logging
 import uuid
-import asyncio
-from datetime import datetime
-from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
-from fastapi.responses import Response
+from datetime import UTC, datetime
+from typing import Optional
 
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi.responses import Response
 from pydantic import BaseModel
 
-from app.models import (
-    WorkshopResponse,
-    WorkshopDetail,
-    MessageResponse,
-    CostResponse
-)
-from app.core.deps import (
-    get_storage_service,
-    get_entra_id_service,
-    get_resource_manager_service,
-    get_policy_service,
-    get_cost_service,
-    get_email_service
-)
-from app.utils.csv_parser import parse_participants_csv, generate_passwords_csv
 from app.config import settings
+from app.core.deps import (
+    get_cost_service,
+    get_email_service,
+    get_entra_id_service,
+    get_policy_service,
+    get_resource_manager_service,
+    get_storage_service,
+)
+from app.exceptions import InvalidInputError, NotFoundError
+from app.models import (
+    CostResponse,
+    MessageResponse,
+    PolicyData,
+    WorkshopDetail,
+    WorkshopResponse,
+)
+from app.utils.csv_parser import generate_passwords_csv, parse_participants_csv
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/workshops", tags=["Workshops"])
 
 
-class ArmTemplate(BaseModel):
-    name: str
-    description: str
-    path: str
+async def _rollback_workshop_resources(
+    created_users: list[dict],
+    created_rg_specs: list[dict],
+    entra_id,
+    resource_mgr,
+) -> None:
+    """워크샵 생성 실패 시 이미 생성된 Azure 리소스를 정리한다.
+
+    보상 트랜잭션(Saga) 패턴으로, 후속 단계 오류 시 좀비 리소스가
+    남지 않도록 역순으로 rollback을 수행한다.
+    각 rollback 단계의 실패는 로깅만 하고 나머지 정리를 계속 진행한다.
+
+    Args:
+        created_users: 생성된 Entra ID 사용자 목록.
+        created_rg_specs: 생성된 리소스 그룹 스펙 (name, subscription_id).
+        entra_id: EntraIDService 인스턴스.
+        resource_mgr: ResourceManagerService 인스턴스.
+    """
+    if not created_users and not created_rg_specs:
+        return
+
+    logger.warning(
+        "Rolling back workshop resources: %d users, %d resource groups",
+        len(created_users),
+        len(created_rg_specs),
+    )
+
+    # 역순: 리소스 그룹 먼저 삭제 (비용 발생 리소스 포함)
+    if created_rg_specs:
+        try:
+            await resource_mgr.delete_resource_groups_bulk(created_rg_specs)
+            logger.info("Rollback: deleted %d resource groups", len(created_rg_specs))
+        except Exception as e:
+            logger.error("Rollback: failed to delete resource groups: %s", e)
+
+    # 그 다음 Entra ID 사용자 삭제
+    if created_users:
+        upns = [u.get('upn') for u in created_users if u.get('upn')]
+        if upns:
+            try:
+                await entra_id.delete_users_bulk(upns)
+                logger.info("Rollback: deleted %d Entra ID users", len(upns))
+            except Exception as e:
+                logger.error("Rollback: failed to delete users: %s", e)
 
 
 class ResourceType(BaseModel):
+    """Azure 리소스 유형."""
+
     value: str
     label: str
     category: str
 
 
-@router.get("/templates", response_model=List[ArmTemplate])
-async def get_templates(storage=Depends(get_storage_service)):
-    """Get available ARM templates for workshop creation"""
-    try:
-        templates_data = storage.list_arm_templates()
-        return [
-            ArmTemplate(
-                name=t.get('name', ''),
-                description=t.get('description', ''),
-                path=t.get('path', '')
-            )
-            for t in templates_data
-        ]
-    except Exception as e:
-        logger.error(f"Failed to get templates: {e}")
-        return []
+class EmailSendResponse(BaseModel):
+    """이메일 전송 결과."""
+
+    total: int
+    sent: int
+    failed: int
+    results: dict
 
 
-@router.get("/resource-types", response_model=List[ResourceType])
+@router.get("/resource-types", response_model=list[ResourceType])
 async def get_resource_types(resource_manager=Depends(get_resource_manager_service)):
-    """Get available Azure resource types (cached for 24 hours)"""
+    """Azure 리소스 유형 목록을 조회한다 (24시간 캐시)."""
     try:
-        resource_types_data = resource_manager.get_resource_types()
+        resource_types_data = await resource_manager.get_resource_types()
         return [
             ResourceType(
-                value=rt.get('value', ''),
-                label=rt.get('label', ''),
-                category=rt.get('category', '')
+                value=rt.get("value", ""),
+                label=rt.get("label", ""),
+                category=rt.get("category", ""),
             )
             for rt in resource_types_data
         ]
     except Exception as e:
-        logger.error(f"Failed to get resource types: {e}")
+        logger.error("Failed to get resource types: %s", e)
         return []
 
 
-@router.get("", response_model=List[WorkshopResponse])
+def _build_cost_specs(participants: list[dict]) -> list[dict]:
+    """참가자 목록에서 비용 조회용 스펙을 추출한다."""
+    return [
+        {
+            "resource_group": p.get("resource_group"),
+            "subscription_id": p.get("subscription_id"),
+        }
+        for p in participants
+    ]
+
+
+async def _get_workshop_or_raise(storage, workshop_id: str) -> dict:
+    """워크샵 메타데이터를 조회하고 없으면 NotFoundError를 발생시킨다.
+
+    Args:
+        storage: StorageService 인스턴스.
+        workshop_id: 워크샵 ID.
+
+    Returns:
+        워크샵 메타데이터 딕셔너리.
+
+    Raises:
+        NotFoundError: 워크샵을 찾을 수 없는 경우.
+    """
+    metadata = await storage.get_workshop_metadata(workshop_id)
+    if not metadata:
+        raise NotFoundError(
+            f"Workshop '{workshop_id}' not found",
+            resource_type="Workshop",
+        )
+    return metadata
+
+
+@router.get("", response_model=list[WorkshopResponse])
 async def list_workshops(
     storage=Depends(get_storage_service),
-    cost=Depends(get_cost_service)
+    cost=Depends(get_cost_service),
 ):
-    """List all active workshops"""
-    try:
-        workshops = storage.list_all_workshops()
+    """전체 워크샵 목록을 비용 정보와 함께 조회한다."""
+    workshops = await storage.list_all_workshops()
 
-        async def enrich_workshop(workshop):
-            # Pass full participant info for per-subscription cost query
-            participants = [
-                {
-                    'resource_group': p.get('resource_group'),
-                    'subscription_id': p.get('subscription_id')
-                }
-                for p in workshop.get('participants', [])
-            ]
-            
-            if participants:
-                cost_data = await cost.get_workshop_total_cost(participants, days=30)
-                return WorkshopResponse(
-                    id=workshop['id'],
-                    name=workshop['name'],
-                    start_date=workshop['start_date'],
-                    end_date=workshop['end_date'],
-                    participant_count=len(workshop.get('participants', [])),
-                    status=workshop.get('status', 'active'),
-                    created_at=workshop.get('created_at', ''),
-                    estimated_cost=cost_data.get('total_cost', 0.0),
-                    currency=cost_data.get('currency', 'USD')
-                )
-            else:
-                return WorkshopResponse(
-                    id=workshop['id'],
-                    name=workshop['name'],
-                    start_date=workshop['start_date'],
-                    end_date=workshop['end_date'],
-                    participant_count=len(workshop.get('participants', [])),
-                    status=workshop.get('status', 'active'),
-                    created_at=workshop.get('created_at', '')
-                )
+    async def _enrich_workshop(workshop: dict) -> WorkshopResponse:
+        participants = workshop.get("participants", [])
+        cost_specs = _build_cost_specs(participants)
 
-        enriched = await asyncio.gather(*[enrich_workshop(w) for w in workshops])
-        return enriched
+        estimated_cost = 0.0
+        currency = "USD"
 
-    except Exception as e:
-        logger.error(f"Failed to list workshops: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        if cost_specs:
+            cost_data = await cost.get_workshop_total_cost(cost_specs, days=30)
+            estimated_cost = cost_data.get("total_cost", 0.0)
+            currency = cost_data.get("currency", "USD")
+
+        return WorkshopResponse(
+            id=workshop["id"],
+            name=workshop["name"],
+            start_date=workshop["start_date"],
+            end_date=workshop["end_date"],
+            participant_count=len(participants),
+            status=workshop.get("status", "active"),
+            created_at=workshop.get("created_at", ""),
+            estimated_cost=estimated_cost,
+            currency=currency,
+        )
+
+    return await asyncio.gather(*[_enrich_workshop(w) for w in workshops])
 
 
 @router.get("/{workshop_id}", response_model=WorkshopDetail)
 async def get_workshop(
     workshop_id: str,
     storage=Depends(get_storage_service),
-    cost=Depends(get_cost_service)
+    cost=Depends(get_cost_service),
 ):
-    """Get workshop details"""
+    """워크샵 상세 정보를 조회한다."""
+    metadata = await _get_workshop_or_raise(storage, workshop_id)
+
+    cost_specs = _build_cost_specs(metadata.get("participants", []))
+    cost_data = await cost.get_workshop_total_cost(cost_specs, days=30)
+
+    return WorkshopDetail(
+        id=metadata["id"],
+        name=metadata["name"],
+        start_date=metadata["start_date"],
+        end_date=metadata["end_date"],
+        participants=metadata.get("participants", []),
+        base_resources_template=metadata.get("base_resources_template", ""),
+        policy=metadata.get("policy", {}),
+        status=metadata.get("status", "active"),
+        created_at=metadata.get("created_at", ""),
+        total_cost=cost_data.get("total_cost", 0.0),
+        currency=cost_data.get("currency", "USD"),
+        cost_breakdown=cost_data.get("breakdown"),
+    )
+
+
+async def _setup_participant(
+    user: dict,
+    rg_result: Optional[dict],
+    base_resources_template: str,
+    regions: list[str],
+    services: list[str],
+    storage,
+    resource_mgr,
+    policy,
+) -> Optional[dict]:
+    """개별 참가자의 RBAC, ARM 배포, 정책을 설정한다.
+
+    Args:
+        user: Entra ID 사용자 정보.
+        rg_result: 생성된 리소스 그룹 정보 (없으면 None 반환).
+        base_resources_template: ARM 템플릿 이름.
+        regions: 허용 리전 목록.
+        services: 허용 서비스 목록.
+        storage: StorageService 인스턴스.
+        resource_mgr: ResourceManagerService 인스턴스.
+        policy: PolicyService 인스턴스.
+
+    Returns:
+        참가자 데이터 딕셔너리 또는 실패 시 None.
+    """
+    if not rg_result:
+        return None
+
     try:
-        metadata = storage.get_workshop_metadata(workshop_id)
-        if not metadata:
-            raise HTTPException(status_code=404, detail="Workshop not found")
+        subscription_id = user["subscription_id"]
 
-        # Pass full participant info for per-subscription cost query
-        participants = [
-            {
-                'resource_group': p.get('resource_group'),
-                'subscription_id': p.get('subscription_id')
-            }
-            for p in metadata.get('participants', [])
-        ]
-        cost_data = await cost.get_workshop_total_cost(participants, days=30)
-
-        return WorkshopDetail(
-            id=metadata['id'],
-            name=metadata['name'],
-            start_date=metadata['start_date'],
-            end_date=metadata['end_date'],
-            participants=metadata.get('participants', []),
-            base_resources_template=metadata.get('base_resources_template', ''),
-            policy=metadata.get('policy', {}),
-            status=metadata.get('status', 'active'),
-            created_at=metadata.get('created_at', ''),
-            total_cost=cost_data.get('total_cost', 0.0),
-            currency=cost_data.get('currency', 'USD'),
-            cost_breakdown=cost_data.get('breakdown')
+        await resource_mgr.assign_rbac_role(
+            scope=rg_result["id"],
+            principal_id=user["object_id"],
+            role_name=settings.default_user_role,
+            subscription_id=subscription_id,
         )
 
-    except HTTPException:
-        raise
+        if base_resources_template and base_resources_template != "none":
+            template = await storage.get_template(base_resources_template)
+            if template:
+                await resource_mgr.deploy_template(
+                    resource_group_name=rg_result["name"],
+                    template=template,
+                    parameters={},
+                    subscription_id=subscription_id,
+                )
+
+        subscription_scope = f"/subscriptions/{subscription_id}"
+        await policy.assign_workshop_policies(
+            scope=subscription_scope,
+            allowed_locations=regions,
+            allowed_resource_types=services,
+            subscription_id=subscription_id,
+        )
+
+        return {
+            "alias": user["alias"],
+            "email": user.get("email", ""),
+            "upn": user["upn"],
+            "password": user["password"],
+            "subscription_id": subscription_id,
+            "resource_group": rg_result["name"],
+            "object_id": user["object_id"],
+        }
     except Exception as e:
-        logger.error(f"Failed to get workshop: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Failed to setup participant %s: %s", user["alias"], e)
+        return None
 
 
 @router.post("", response_model=WorkshopDetail)
@@ -188,127 +296,107 @@ async def create_workshop(
     storage=Depends(get_storage_service),
     entra_id=Depends(get_entra_id_service),
     resource_mgr=Depends(get_resource_manager_service),
-    policy=Depends(get_policy_service)
+    policy=Depends(get_policy_service),
 ):
+    """새 워크샵을 생성한다.
+
+    CSV 형식: 이메일 주소만 포함하는 단일 컬럼.
+    Azure 리소스 생성 후 DB 저장이 실패하면 보상 트랜잭션(rollback)을 수행한다.
     """
-    Create a new workshop with per-participant subscription assignment.
-    
-    CSV format: email,subscription_id
-    Each participant must have their own subscription_id in the CSV file.
-    Resources are created in the participant's dedicated subscription.
-    """
+    created_users: list[dict] = []
+    created_rg_specs: list[dict] = []
+
     try:
         workshop_id = str(uuid.uuid4())
-        
-        # CSV now includes email and subscription_id per participant
-        # alias is extracted from email
         participants = await parse_participants_csv(participants_file)
-        regions = [r.strip() for r in allowed_regions.split(',')]
-        services = [s.strip() for s in allowed_services.split(',')]
-        
-        logger.info(f"Creating workshop with {len(participants)} participants (per-subscription mode)")
+        regions = [r.strip() for r in allowed_regions.split(",")]
+        services = [s.strip() for s in allowed_services.split(",")]
 
-        # Create Entra ID users
-        user_results = await entra_id.create_users_bulk([p['alias'] for p in participants])
+        logger.info(
+            "Creating workshop '%s' with %d participants",
+            name,
+            len(participants),
+        )
+
+        # Step 1: Entra ID 사용자 생성
+        user_results = await entra_id.create_users_bulk(
+            [p["alias"] for p in participants]
+        )
         if not user_results:
-            raise HTTPException(status_code=500, detail="Failed to create users")
+            raise InvalidInputError("Failed to create any Entra ID users")
+        created_users = user_results
 
-        # Map subscription_id and email from CSV to user results
-        alias_to_data = {p['alias']: {'subscription_id': p['subscription_id'], 'email': p['email']} for p in participants}
+        alias_to_email = {p["alias"]: p["email"] for p in participants}
         for user in user_results:
-            user_data = alias_to_data.get(user['alias'], {})
-            user['subscription_id'] = user_data.get('subscription_id')
-            user['email'] = user_data.get('email')
+            user["email"] = alias_to_email.get(user["alias"], "")
 
-        # Create resource groups in each participant's subscription
+        # Step 2: 리소스 그룹 생성
         rg_specs = [
             {
-                'name': f"{settings.resource_group_prefix}-{workshop_id[:8]}-{user['alias']}",
-                'location': regions[0],
-                'subscription_id': user['subscription_id'],
-                'tags': {
-                    'workshop_id': workshop_id,
-                    'workshop_name': name,
-                    'end_date': end_date,
-                    'participant': user['alias']
-                }
+                "name": (
+                    f"{settings.resource_group_prefix}"
+                    f"-{workshop_id[:8]}-{user['alias']}"
+                ),
+                "location": regions[0],
+                "subscription_id": user["subscription_id"],
+                "tags": {
+                    "workshop_id": workshop_id,
+                    "workshop_name": name,
+                    "end_date": end_date,
+                    "participant": user["alias"],
+                },
             }
             for user in user_results
         ]
         rg_results = await resource_mgr.create_resource_groups_bulk(rg_specs)
+        created_rg_specs = [
+            {"name": rg["name"], "subscription_id": rg.get("subscription_id")}
+            for rg in rg_results
+        ]
 
-        async def setup_participant(user, rg_spec):
-            try:
-                rg = next((r for r in rg_results if r['name'] == rg_spec['name']), None)
-                if not rg:
-                    return None
-
-                subscription_id = user['subscription_id']
-
-                # Assign RBAC role in participant's subscription
-                await resource_mgr.assign_rbac_role(
-                    scope=rg['id'],
-                    principal_id=user['object_id'],
-                    role_name=settings.default_user_role,
-                    subscription_id=subscription_id
-                )
-
-                # Deploy ARM template if specified
-                if base_resources_template and base_resources_template != "none":
-                    template = storage.get_arm_template(base_resources_template)
-                    if template:
-                        await resource_mgr.deploy_arm_template(
-                            resource_group_name=rg['name'],
-                            template=template,
-                            parameters={},
-                            subscription_id=subscription_id
-                        )
-
-                # Assign policies at subscription level for this participant's subscription
-                subscription_scope = f"/subscriptions/{subscription_id}"
-                await policy.assign_workshop_policies(
-                    scope=subscription_scope,
-                    allowed_locations=regions,
-                    allowed_resource_types=services,
-                    subscription_id=subscription_id
-                )
-
-                return {
-                    'alias': user['alias'],
-                    'email': user.get('email', ''),
-                    'upn': user['upn'],
-                    'password': user['password'],
-                    'subscription_id': subscription_id,
-                    'resource_group': rg['name'],
-                    'object_id': user['object_id']
-                }
-            except Exception as e:
-                logger.error(f"Failed to setup participant {user['alias']}: {e}")
-                return None
-
+        # Step 3: 참가자별 설정 (RBAC, ARM 배포, 정책)
+        setup_tasks = [
+            _setup_participant(
+                user=user,
+                rg_result=next(
+                    (r for r in rg_results if r["name"] == spec["name"]), None
+                ),
+                base_resources_template=base_resources_template,
+                regions=regions,
+                services=services,
+                storage=storage,
+                resource_mgr=resource_mgr,
+                policy=policy,
+            )
+            for user, spec in zip(user_results, rg_specs)
+        ]
         participant_results = await asyncio.gather(
-            *[setup_participant(user, rg_spec) for user, rg_spec in zip(user_results, rg_specs)],
-            return_exceptions=True
+            *setup_tasks, return_exceptions=True
         )
-        successful_participants = [p for p in participant_results if p and not isinstance(p, Exception)]
+        successful_participants = [
+            p
+            for p in participant_results
+            if p and not isinstance(p, Exception)
+        ]
 
+        # Step 4: Table Storage 저장
         metadata = {
-            'id': workshop_id,
-            'name': name,
-            'start_date': start_date,
-            'end_date': end_date,
-            'participants': successful_participants,
-            'base_resources_template': base_resources_template,
-            'policy': {'allowed_regions': regions, 'allowed_services': services},
-            'status': 'active',
-            'created_at': datetime.utcnow().isoformat() + 'Z'
+            "id": workshop_id,
+            "name": name,
+            "start_date": start_date,
+            "end_date": end_date,
+            "participants": successful_participants,
+            "base_resources_template": base_resources_template,
+            "policy": {"allowed_regions": regions, "allowed_services": services},
+            "status": "active",
+            "created_at": datetime.now(UTC).isoformat(),
         }
-        storage.save_workshop_metadata(workshop_id, metadata)
-        
-        csv_content = generate_passwords_csv(successful_participants)
-        storage.save_passwords_csv(workshop_id, csv_content)
+        await storage.save_workshop_metadata(workshop_id, metadata)
 
-        logger.info(f"Workshop created: {workshop_id}")
+        csv_content = generate_passwords_csv(successful_participants)
+        await storage.save_passwords_csv(workshop_id, csv_content)
+
+        logger.info("Workshop created: %s", workshop_id)
 
         return WorkshopDetail(
             id=workshop_id,
@@ -317,18 +405,17 @@ async def create_workshop(
             end_date=end_date,
             participants=successful_participants,
             base_resources_template=base_resources_template,
-            policy=metadata['policy'],
-            status='active',
-            created_at=metadata['created_at'],
+            policy=metadata["policy"],
+            status="active",
+            created_at=metadata["created_at"],
             total_cost=0.0,
-            currency='USD'
+            currency="USD",
         )
-
-    except HTTPException:
+    except Exception:
+        await _rollback_workshop_resources(
+            created_users, created_rg_specs, entra_id, resource_mgr
+        )
         raise
-    except Exception as e:
-        logger.error(f"Failed to create workshop: {e}")
-        raise HTTPException(status_code=500, detail=f"Workshop creation failed: {str(e)}")
 
 
 @router.delete("/{workshop_id}", response_model=MessageResponse)
@@ -336,109 +423,89 @@ async def delete_workshop(
     workshop_id: str,
     storage=Depends(get_storage_service),
     entra_id=Depends(get_entra_id_service),
-    resource_mgr=Depends(get_resource_manager_service)
+    resource_mgr=Depends(get_resource_manager_service),
 ):
-    """Delete a workshop and cleanup all resources (supports per-subscription)"""
-    try:
-        metadata = storage.get_workshop_metadata(workshop_id)
-        if not metadata:
-            raise HTTPException(status_code=404, detail="Workshop not found")
+    """워크샵과 관련 리소스를 모두 삭제한다 (구독별 지원)."""
+    metadata = await _get_workshop_or_raise(storage, workshop_id)
+    participants = metadata.get("participants", [])
 
-        participants = metadata.get('participants', [])
+    rg_specs = [
+        {
+            "name": p.get("resource_group"),
+            "subscription_id": p.get("subscription_id"),
+        }
+        for p in participants
+    ]
+    await resource_mgr.delete_resource_groups_bulk(rg_specs)
 
-        # Delete resource groups with subscription context
-        rg_specs = [
-            {
-                'name': p.get('resource_group'),
-                'subscription_id': p.get('subscription_id')
-            }
-            for p in participants
-        ]
-        await resource_mgr.delete_resource_groups_bulk(rg_specs)
+    upns = [p.get("upn") for p in participants]
+    await entra_id.delete_users_bulk(upns)
 
-        upns = [p.get('upn') for p in participants]
-        await entra_id.delete_users_bulk(upns)
+    await storage.delete_workshop_metadata(workshop_id)
 
-        storage.delete_workshop_metadata(workshop_id)
+    logger.info("Workshop deleted: %s", workshop_id)
 
-        logger.info(f"Workshop deleted: {workshop_id}")
-
-        return MessageResponse(
-            message="Workshop deleted successfully",
-            detail=f"Deleted {len(participants)} participants and their resources"
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to delete workshop: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    return MessageResponse(
+        message="Workshop deleted successfully",
+        detail=f"Deleted {len(participants)} participants and their resources",
+    )
 
 
 @router.get("/{workshop_id}/passwords", response_class=Response)
 async def download_passwords(
     workshop_id: str,
-    storage=Depends(get_storage_service)
+    storage=Depends(get_storage_service),
 ):
-    """Download passwords CSV file"""
-    try:
-        csv_content = storage.get_passwords_csv(workshop_id)
-        if not csv_content:
-            raise HTTPException(status_code=404, detail="Passwords file not found")
-
-        return Response(
-            content=csv_content,
-            media_type="text/csv",
-            headers={"Content-Disposition": f"attachment; filename=workshop-{workshop_id}-passwords.csv"}
+    """참가자 비밀번호 CSV 파일을 다운로드한다."""
+    csv_content = await storage.get_passwords_csv(workshop_id)
+    if not csv_content:
+        raise NotFoundError(
+            f"Passwords file for workshop '{workshop_id}' not found",
+            resource_type="PasswordsCSV",
         )
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to download passwords: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    return Response(
+        content=csv_content,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename=workshop-{workshop_id}-passwords.csv"
+            )
+        },
+    )
 
 
 @router.get("/{workshop_id}/resources")
 async def get_workshop_resources(
     workshop_id: str,
     storage=Depends(get_storage_service),
-    resource_mgr=Depends(get_resource_manager_service)
+    resource_mgr=Depends(get_resource_manager_service),
 ):
-    """Get all resources in workshop resource groups (supports per-subscription)"""
-    try:
-        metadata = storage.get_workshop_metadata(workshop_id)
-        if not metadata:
-            raise HTTPException(status_code=404, detail="Workshop not found")
+    """워크샵 리소스 그룹 내 모든 리소스를 조회한다 (구독별 지원)."""
+    metadata = await _get_workshop_or_raise(storage, workshop_id)
+    participants = metadata.get("participants", [])
+    all_resources = []
 
-        participants = metadata.get('participants', [])
-        all_resources = []
+    for participant in participants:
+        rg_name = participant.get("resource_group")
+        subscription_id = participant.get("subscription_id")
+        if not rg_name:
+            continue
 
-        for participant in participants:
-            rg_name = participant.get('resource_group')
-            subscription_id = participant.get('subscription_id')
-            if rg_name:
-                resources = await resource_mgr.list_resources_in_group(
-                    rg_name,
-                    subscription_id=subscription_id
-                )
-                for resource in resources:
-                    resource['participant'] = participant.get('alias', '')
-                    resource['resource_group'] = rg_name
-                    resource['subscription_id'] = subscription_id
-                all_resources.extend(resources)
+        resources = await resource_mgr.list_resources_in_group(
+            rg_name, subscription_id=subscription_id
+        )
+        for resource in resources:
+            resource["participant"] = participant.get("alias", "")
+            resource["resource_group"] = rg_name
+            resource["subscription_id"] = subscription_id
+        all_resources.extend(resources)
 
-        return {
-            'workshop_id': workshop_id,
-            'total_count': len(all_resources),
-            'resources': all_resources
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to get workshop resources: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    return {
+        "workshop_id": workshop_id,
+        "total_count": len(all_resources),
+        "resources": all_resources,
+    }
 
 
 @router.get("/{workshop_id}/cost", response_model=CostResponse)
@@ -446,116 +513,78 @@ async def get_workshop_cost(
     workshop_id: str,
     use_workshop_period: bool = True,
     storage=Depends(get_storage_service),
-    cost=Depends(get_cost_service)
+    cost=Depends(get_cost_service),
 ):
-    """Get workshop cost details based on workshop period (supports per-subscription)"""
-    try:
-        metadata = storage.get_workshop_metadata(workshop_id)
-        if not metadata:
-            raise HTTPException(status_code=404, detail="Workshop not found")
+    """워크샵 기간 기반 비용 상세를 조회한다 (구독별 지원)."""
+    metadata = await _get_workshop_or_raise(storage, workshop_id)
+    cost_specs = _build_cost_specs(metadata.get("participants", []))
 
-        # Pass full participant info for per-subscription cost query
-        participants = [
-            {
-                'resource_group': p.get('resource_group'),
-                'subscription_id': p.get('subscription_id')
-            }
-            for p in metadata.get('participants', [])
-        ]
-        
-        if use_workshop_period:
-            start_date = metadata.get('start_date')
-            end_date = metadata.get('end_date')
-            cost_data = await cost.get_workshop_total_cost(
-                participants, 
-                start_date=start_date, 
-                end_date=end_date
-            )
-            cost_data['start_date'] = start_date
-            cost_data['end_date'] = end_date
-        else:
-            cost_data = await cost.get_workshop_total_cost(participants, days=30)
+    if use_workshop_period:
+        start_date = metadata.get("start_date")
+        end_date = metadata.get("end_date")
+        cost_data = await cost.get_workshop_total_cost(
+            cost_specs, start_date=start_date, end_date=end_date
+        )
+        cost_data["start_date"] = start_date
+        cost_data["end_date"] = end_date
+    else:
+        cost_data = await cost.get_workshop_total_cost(cost_specs, days=30)
 
-        return CostResponse(**cost_data)
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to get workshop cost: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-class EmailSendResponse(BaseModel):
-    """Response for email send operation"""
-    total: int
-    sent: int
-    failed: int
-    results: dict
+    return CostResponse(**cost_data)
 
 
 @router.post("/{workshop_id}/send-credentials", response_model=EmailSendResponse)
 async def send_credentials_email(
     workshop_id: str,
-    participant_emails: Optional[List[str]] = Query(
+    participant_emails: Optional[list[str]] = Query(
         default=None,
-        description="Specific participant emails to send to. If not provided, sends to all participants."
+        description="전송 대상 참가자 이메일. 미지정 시 전체 참가자에게 전송.",
     ),
     storage=Depends(get_storage_service),
-    email=Depends(get_email_service)
+    email=Depends(get_email_service),
 ):
-    """
-    Send credential emails to workshop participants.
-    
-    - If participant_emails is provided, only send to those specific emails
-    - If not provided, send to all participants in the workshop
-    """
-    try:
-        metadata = storage.get_workshop_metadata(workshop_id)
-        if not metadata:
-            raise HTTPException(status_code=404, detail="Workshop not found")
+    """워크샵 참가자에게 자격 증명 이메일을 전송한다."""
+    metadata = await _get_workshop_or_raise(storage, workshop_id)
 
-        workshop_name = metadata.get('name', 'Azure Workshop')
-        all_participants = metadata.get('participants', [])
-        
-        # Filter participants if specific emails provided
-        if participant_emails:
-            participants_to_send = [
-                p for p in all_participants 
-                if p.get('email', '').lower() in [e.lower() for e in participant_emails]
-            ]
-            if not participants_to_send:
-                raise HTTPException(
-                    status_code=400, 
-                    detail="No matching participants found for provided emails"
-                )
-        else:
-            participants_to_send = all_participants
-        
-        # Check if participants have email addresses
-        participants_with_email = [p for p in participants_to_send if p.get('email')]
-        if not participants_with_email:
-            raise HTTPException(
-                status_code=400,
-                detail="No participants have email addresses configured"
+    workshop_name = metadata.get("name", "Azure Workshop")
+    all_participants = metadata.get("participants", [])
+
+    if participant_emails:
+        lower_emails = {e.lower() for e in participant_emails}
+        participants_to_send = [
+            p for p in all_participants
+            if p.get("email", "").lower() in lower_emails
+        ]
+        if not participants_to_send:
+            raise InvalidInputError(
+                "No matching participants found for provided emails"
             )
-        
-        # Send emails
-        results = await email.send_credentials_bulk(participants_with_email, workshop_name)
-        
-        sent_count = sum(1 for v in results.values() if v)
-        failed_count = len(results) - sent_count
-        
-        logger.info(f"Sent credentials for workshop {workshop_id}: {sent_count} sent, {failed_count} failed")
-        
-        return EmailSendResponse(
-            total=len(results),
-            sent=sent_count,
-            failed=failed_count,
-            results=results
+    else:
+        participants_to_send = all_participants
+
+    participants_with_email = [p for p in participants_to_send if p.get("email")]
+    if not participants_with_email:
+        raise InvalidInputError(
+            "No participants have email addresses configured"
         )
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to send credentials: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    results = await email.send_credentials_bulk(
+        participants_with_email, workshop_name
+    )
+
+    sent_count = sum(1 for v in results.values() if v)
+    failed_count = len(results) - sent_count
+
+    logger.info(
+        "Sent credentials for workshop %s: %d sent, %d failed",
+        workshop_id,
+        sent_count,
+        failed_count,
+    )
+
+    return EmailSendResponse(
+        total=len(results),
+        sent=sent_count,
+        failed=failed_count,
+        results=results,
+    )
