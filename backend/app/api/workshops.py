@@ -27,6 +27,7 @@ from app.models import (
     CostResponse,
     MessageResponse,
     PolicyData,
+    SurveyUrlUpdate,
     WorkshopDetail,
     WorkshopResponse,
 )
@@ -211,6 +212,7 @@ async def get_workshop(
         total_cost=cost_data.get("total_cost", 0.0),
         currency=cost_data.get("currency", "USD"),
         cost_breakdown=cost_data.get("breakdown"),
+        survey_url=metadata.get("survey_url") or None,
     )
 
 
@@ -293,6 +295,7 @@ async def create_workshop(
     allowed_regions: str = Form(...),
     allowed_services: str = Form(...),
     participants_file: UploadFile = File(...),
+    survey_url: Optional[str] = Form(default=None, description="M365 Forms 만족도 조사 URL"),
     storage=Depends(get_storage_service),
     entra_id=Depends(get_entra_id_service),
     resource_mgr=Depends(get_resource_manager_service),
@@ -390,6 +393,7 @@ async def create_workshop(
             "policy": {"allowed_regions": regions, "allowed_services": services},
             "status": "active",
             "created_at": datetime.now(UTC).isoformat(),
+            "survey_url": survey_url or "",
         }
         await storage.save_workshop_metadata(workshop_id, metadata)
 
@@ -410,6 +414,7 @@ async def create_workshop(
             created_at=metadata["created_at"],
             total_cost=0.0,
             currency="USD",
+            survey_url=survey_url or None,
         )
     except Exception:
         await _rollback_workshop_resources(
@@ -577,6 +582,88 @@ async def send_credentials_email(
 
     logger.info(
         "Sent credentials for workshop %s: %d sent, %d failed",
+        workshop_id,
+        sent_count,
+        failed_count,
+    )
+
+    return EmailSendResponse(
+        total=len(results),
+        sent=sent_count,
+        failed=failed_count,
+        results=results,
+    )
+
+
+@router.patch("/{workshop_id}/survey-url", response_model=MessageResponse)
+async def update_survey_url(
+    workshop_id: str,
+    body: SurveyUrlUpdate,
+    storage=Depends(get_storage_service),
+):
+    """워크샵의 만족도 조사 URL을 등록 또는 수정한다."""
+    metadata = await _get_workshop_or_raise(storage, workshop_id)
+    metadata["survey_url"] = body.survey_url
+    await storage.save_workshop_metadata(workshop_id, metadata)
+
+    logger.info("Updated survey URL for workshop %s", workshop_id)
+
+    return MessageResponse(
+        message="Survey URL updated successfully",
+        detail=body.survey_url,
+    )
+
+
+@router.post("/{workshop_id}/send-survey", response_model=EmailSendResponse)
+async def send_survey_email(
+    workshop_id: str,
+    participant_emails: Optional[list[str]] = Query(
+        default=None,
+        description="전송 대상 참가자 이메일. 미지정 시 전체 참가자에게 전송.",
+    ),
+    storage=Depends(get_storage_service),
+    email=Depends(get_email_service),
+):
+    """워크샵 참가자에게 만족도 조사 이메일을 전송한다."""
+    metadata = await _get_workshop_or_raise(storage, workshop_id)
+
+    survey_url = metadata.get("survey_url", "")
+    if not survey_url:
+        raise InvalidInputError(
+            f"Workshop '{workshop_id}' does not have a survey URL configured"
+        )
+
+    workshop_name = metadata.get("name", "Azure Workshop")
+    all_participants = metadata.get("participants", [])
+
+    if participant_emails:
+        lower_emails = {e.lower() for e in participant_emails}
+        participants_to_send = [
+            p for p in all_participants
+            if p.get("email", "").lower() in lower_emails
+        ]
+        if not participants_to_send:
+            raise InvalidInputError(
+                "No matching participants found for provided emails"
+            )
+    else:
+        participants_to_send = all_participants
+
+    participants_with_email = [p for p in participants_to_send if p.get("email")]
+    if not participants_with_email:
+        raise InvalidInputError(
+            "No participants have email addresses configured"
+        )
+
+    results = await email.send_survey_bulk(
+        participants_with_email, workshop_name, survey_url
+    )
+
+    sent_count = sum(1 for v in results.values() if v)
+    failed_count = len(results) - sent_count
+
+    logger.info(
+        "Sent survey for workshop %s: %d sent, %d failed",
         workshop_id,
         sent_count,
         failed_count,
