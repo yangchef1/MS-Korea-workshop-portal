@@ -246,6 +246,7 @@ export interface Workshop {
   participant_count?: number
   created_at: string
   updated_at?: string
+  survey_url?: string
 }
 
 export interface Participant {
@@ -334,6 +335,7 @@ export interface CreateWorkshopRequest {
   allowed_regions: string  // comma-separated
   allowed_services: string  // comma-separated
   participants_file: File
+  survey_url?: string
 }
 
 // API Error type
@@ -348,6 +350,14 @@ export const handleApiError = (error: AxiosError<ApiError>): string => {
     return error.response.data.detail
   }
   return error.message || "An unexpected error occurred"
+}
+
+/** Email send result. */
+export interface EmailSendResponse {
+  total: number
+  sent: number
+  failed: number
+  results: Record<string, boolean>
 }
 
 // Workshop API
@@ -371,6 +381,9 @@ export const workshopApi = {
     formData.append("allowed_regions", data.allowed_regions)
     formData.append("allowed_services", data.allowed_services)
     formData.append("participants_file", data.participants_file)
+    if (data.survey_url) {
+      formData.append("survey_url", data.survey_url)
+    }
 
     const response = await apiClient.post<Workshop>("/workshops", formData, {
       headers: {
@@ -416,6 +429,27 @@ export const workshopApi = {
 
   getResourceTypes: async (): Promise<ResourceType[]> => {
     const response = await apiClient.get<ResourceType[]>("/workshops/resource-types")
+    return response.data
+  },
+
+  /** 워크샵의 만족도 조사 URL을 등록 또는 수정한다. */
+  updateSurveyUrl: async (id: string, surveyUrl: string): Promise<void> => {
+    await apiClient.patch(`/workshops/${id}/survey-url`, {
+      survey_url: surveyUrl,
+    })
+  },
+
+  /** 워크샵 참가자에게 만족도 조사 이메일을 전송한다. */
+  sendSurvey: async (
+    id: string,
+    emails?: string[]
+  ): Promise<EmailSendResponse> => {
+    const params = emails ? { participant_emails: emails } : {}
+    const response = await apiClient.post<EmailSendResponse>(
+      `/workshops/${id}/send-survey`,
+      null,
+      { params }
+    )
     return response.data
   },
 }

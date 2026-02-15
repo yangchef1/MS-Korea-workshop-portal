@@ -48,6 +48,7 @@ function CreateWorkshop() {
     start_date: "",
     end_date: "",
     infra_template: "",
+    survey_url: "",
   })
 
   const [selectedServices, setSelectedServices] = useState<string[]>([])
@@ -136,6 +137,7 @@ function CreateWorkshop() {
       allowed_regions: formData.region,
       allowed_services: selectedServices.join(","),
       participants_file: csvFile,
+      survey_url: formData.survey_url || undefined,
     })
   }
 
@@ -346,6 +348,22 @@ function CreateWorkshop() {
                 </select>
               </div>
             )}
+
+            <div className="space-y-2">
+              <Label htmlFor="survey_url">만족도 조사 URL (선택)</Label>
+              <Input
+                id="survey_url"
+                type="url"
+                value={formData.survey_url}
+                onChange={(e) =>
+                  setFormData({ ...formData, survey_url: e.target.value })
+                }
+                placeholder="예: https://forms.office.com/..."
+              />
+              <p className="text-xs text-muted-foreground">
+                M365 Forms 만족도 조사 링크를 입력하세요. 나중에 추가할 수도 있습니다.
+              </p>
+            </div>
           </CardContent>
         </Card>
 
