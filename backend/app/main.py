@@ -39,6 +39,14 @@ async def lifespan(app: FastAPI):
     )
 
     yield
+
+    # Gracefully close async Azure SDK sessions to suppress aiohttp warnings
+    try:
+        from app.services.storage import storage_service
+        await storage_service.table_service_client.close()
+    except Exception:
+        pass
+
     logger.info("Shutting down application")
 
 
