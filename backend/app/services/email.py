@@ -297,6 +297,103 @@ class EmailService:
         
         return results
 
+    def _generate_survey_email(
+        self,
+        workshop_name: str,
+        participant_alias: str,
+        participant_email: str,
+        survey_url: str,
+    ) -> EmailMessage:
+        """참가자용 만족도 조사 이메일을 생성한다.
+
+        Jinja2 템플릿 파일(survey_email.html, survey_email.txt)을
+        사용하여 이메일 본문을 렌더링한다.
+
+        Args:
+            workshop_name: 워크샵 이름.
+            participant_alias: 참가자 별명.
+            participant_email: 참가자 이메일.
+            survey_url: M365 Forms 만족도 조사 URL.
+
+        Returns:
+            HTML 및 텍스트 본문을 포함한 EmailMessage.
+        """
+        template_context = {
+            "workshop_name": workshop_name,
+            "alias": participant_alias,
+            "survey_url": survey_url,
+        }
+
+        html_template = _jinja_env.get_template("survey_email.html")
+        text_template = _jinja_env.get_template("survey_email.txt")
+
+        return EmailMessage(
+            to=participant_email,
+            subject=f"[{workshop_name}] 워크샵 만족도 조사",
+            body_html=html_template.render(**template_context),
+            body_text=text_template.render(**template_context),
+        )
+
+    async def send_survey_email(
+        self,
+        workshop_name: str,
+        participant_alias: str,
+        participant_email: str,
+        survey_url: str,
+    ) -> bool:
+        """참가자에게 만족도 조사 이메일을 전송한다.
+
+        Args:
+            workshop_name: 워크샵 이름.
+            participant_alias: 참가자 별명.
+            participant_email: 참가자 이메일.
+            survey_url: M365 Forms 만족도 조사 URL.
+
+        Returns:
+            전송 성공 시 True.
+        """
+        message = self._generate_survey_email(
+            workshop_name, participant_alias, participant_email, survey_url
+        )
+        return await self._send_email(message)
+
+    async def send_survey_bulk(
+        self,
+        participants: list[dict],
+        workshop_name: str,
+        survey_url: str,
+    ) -> dict[str, bool]:
+        """여러 참가자에게 만족도 조사 이메일을 순차 전송한다.
+
+        Rate limiting을 위해 각 전송 사이에 지연을 둔다.
+
+        Args:
+            participants: 참가자 데이터 목록 (alias, email 필드 필요).
+            workshop_name: 워크샵 이름.
+            survey_url: M365 Forms 만족도 조사 URL.
+
+        Returns:
+            이메일 주소를 키로, 전송 성공 여부를 값으로 가진 딕셔너리.
+        """
+        results = {}
+
+        for participant in participants:
+            email = participant.get("email", "")
+            alias = participant.get("alias", "")
+            success = await self.send_survey_email(
+                workshop_name, alias, email, survey_url
+            )
+            results[email] = success
+            await asyncio.sleep(_SEND_DELAY_SECONDS)
+
+        successful = sum(1 for v in results.values() if v)
+        logger.info(
+            "Sent %d/%d survey emails for workshop: %s",
+            successful, len(participants), workshop_name
+        )
+
+        return results
+
 
 @lru_cache(maxsize=1)
 def get_email_service() -> EmailService:
