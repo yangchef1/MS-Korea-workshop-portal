@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router"
-import { useSuspenseQuery, useQuery } from "@tanstack/react-query"
-import { Suspense, useState, useEffect } from "react"
+import { useSuspenseQuery, useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
+import { Suspense, useState } from "react"
 import { Link } from "@tanstack/react-router"
 import {
   ArrowLeft,
@@ -16,6 +16,11 @@ import {
   DollarSign,
   TrendingUp,
   AlertCircle,
+  ClipboardList,
+  ExternalLink,
+  Send,
+  Check,
+  Link as LinkIcon,
 } from "lucide-react"
 
 import { workshopApi, type Participant, type AzureResource, type CostBreakdown } from "@/client"
@@ -27,6 +32,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import useCustomToast from "@/hooks/useCustomToast"
 
@@ -234,6 +240,164 @@ function CostAnalysis({ workshopId, refetch, isRefetching }: { workshopId: strin
   )
 }
 
+function SurveyTab({ workshopId, surveyUrl }: { workshopId: string; surveyUrl?: string }) {
+  const { showSuccessToast, showErrorToast } = useCustomToast()
+  const queryClient = useQueryClient()
+  const [urlInput, setUrlInput] = useState(surveyUrl || "")
+  const [isSaved, setIsSaved] = useState(!!surveyUrl)
+
+  const updateUrlMutation = useMutation({
+    mutationFn: (url: string) => workshopApi.updateSurveyUrl(workshopId, url),
+    onSuccess: () => {
+      showSuccessToast("만족도 조사 URL이 저장되었습니다")
+      setIsSaved(true)
+      queryClient.invalidateQueries({ queryKey: ["workshop", workshopId] })
+    },
+    onError: () => {
+      showErrorToast("URL 저장에 실패했습니다")
+    },
+  })
+
+  const sendSurveyMutation = useMutation({
+    mutationFn: () => workshopApi.sendSurvey(workshopId),
+    onSuccess: (data) => {
+      showSuccessToast(
+        `설문 링크 전송 완료: ${data.sent}명 성공, ${data.failed}명 실패`
+      )
+    },
+    onError: () => {
+      showErrorToast("설문 링크 전송에 실패했습니다")
+    },
+  })
+
+  const handleSaveUrl = () => {
+    if (!urlInput.trim()) {
+      showErrorToast("URL을 입력해 주세요")
+      return
+    }
+    updateUrlMutation.mutate(urlInput.trim())
+  }
+
+  const copyToClipboard = () => {
+    navigator.clipboard.writeText(urlInput)
+    showSuccessToast("클립보드에 복사되었습니다")
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* URL 관리 */}
+      <Card>
+        <CardHeader>
+          <CardTitle>만족도 조사 URL</CardTitle>
+          <CardDescription>
+            M365 Forms에서 생성한 만족도 조사 링크를 등록하세요
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex gap-2">
+            <Input
+              type="url"
+              placeholder="https://forms.office.com/..."
+              value={urlInput}
+              onChange={(e) => {
+                setUrlInput(e.target.value)
+                setIsSaved(false)
+              }}
+              className="flex-1"
+            />
+            <Button
+              onClick={handleSaveUrl}
+              disabled={updateUrlMutation.isPending || (!urlInput.trim())}
+            >
+              {updateUrlMutation.isPending ? (
+                <RefreshCw className="h-4 w-4 animate-spin mr-2" />
+              ) : isSaved ? (
+                <Check className="h-4 w-4 mr-2" />
+              ) : (
+                <LinkIcon className="h-4 w-4 mr-2" />
+              )}
+              {isSaved ? "저장됨" : "저장"}
+            </Button>
+          </div>
+          {isSaved && urlInput && (
+            <div className="flex items-center gap-2 text-sm">
+              <a
+                href={urlInput}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary hover:underline flex items-center gap-1 truncate"
+              >
+                <ExternalLink className="h-3 w-3 flex-shrink-0" />
+                {urlInput}
+              </a>
+              <Button variant="ghost" size="sm" onClick={copyToClipboard}>
+                <Copy className="h-3 w-3" />
+              </Button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* 설문 링크 공유 */}
+      <Card>
+        <CardHeader>
+          <CardTitle>설문 링크 공유</CardTitle>
+          <CardDescription>
+            참가자에게 만족도 조사 링크를 이메일로 전송합니다
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {isSaved && urlInput ? (
+            <div className="flex items-center gap-4">
+              <Button
+                onClick={() => sendSurveyMutation.mutate()}
+                disabled={sendSurveyMutation.isPending}
+              >
+                {sendSurveyMutation.isPending ? (
+                  <RefreshCw className="h-4 w-4 animate-spin mr-2" />
+                ) : (
+                  <Send className="h-4 w-4 mr-2" />
+                )}
+                {sendSurveyMutation.isPending
+                  ? "전송 중..."
+                  : "전체 참가자에게 전송"}
+              </Button>
+            </div>
+          ) : (
+            <p className="text-muted-foreground text-sm">
+              먼저 만족도 조사 URL을 등록해 주세요.
+            </p>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Forms 결과 조회 */}
+      {isSaved && urlInput && (
+        <Card>
+          <CardHeader>
+            <CardTitle>결과 조회</CardTitle>
+            <CardDescription>
+              M365 Forms 결과 페이지에서 응답을 확인할 수 있습니다
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <a
+              href={urlInput}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <Button variant="outline">
+                <ExternalLink className="h-4 w-4 mr-2" />
+                Forms 결과 보기
+              </Button>
+            </a>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  )
+}
+
 function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
   const { data: workshop } = useSuspenseQuery(getWorkshopQueryOptions(workshopId))
   
@@ -293,7 +457,7 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
         </div>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-4">
         <Card className="flex items-center">
           <CardContent className="py-4 w-full">
             <div className="flex flex-col gap-2">
@@ -331,6 +495,19 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
             </div>
           </CardContent>
         </Card>
+        <Card className="flex items-center">
+          <CardContent className="py-4 w-full">
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <ClipboardList className="h-4 w-4" />
+                <span className="text-sm">만족도 조사</span>
+              </div>
+              <p className="text-xl font-semibold">
+                {workshop.survey_url ? "등록됨" : "미등록"}
+              </p>
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
       <Tabs defaultValue="participants">
@@ -338,6 +515,7 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
           <TabsTrigger value="participants">참가자</TabsTrigger>
           <TabsTrigger value="resources">리소스</TabsTrigger>
           <TabsTrigger value="costs">비용</TabsTrigger>
+          <TabsTrigger value="survey">설문</TabsTrigger>
         </TabsList>
 
         <TabsContent value="participants" className="mt-4">
@@ -390,6 +568,10 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
               <CostAnalysis workshopId={workshop.id} refetch={refetchCost} isRefetching={isRefetchingCost} />
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="survey" className="mt-4">
+          <SurveyTab workshopId={workshop.id} surveyUrl={workshop.survey_url} />
         </TabsContent>
       </Tabs>
     </div>
