@@ -366,9 +366,9 @@ function CreateWorkshop() {
                   href="https://forms.office.com"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-primary hover:underline"
+                  className="text-sky-500 hover:text-sky-600 hover:underline"
                 >
-                  아직 폼이 없으신가요? 새 폼 만들기 →
+                  아직 폼이 없으신가요? 새 폼 만들기
                 </a>
               </p>
             </div>
