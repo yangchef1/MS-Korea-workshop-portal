@@ -361,7 +361,15 @@ function CreateWorkshop() {
                 placeholder="예: https://forms.office.com/..."
               />
               <p className="text-xs text-muted-foreground">
-                M365 Forms 만족도 조사 링크를 입력하세요. 나중에 추가할 수도 있습니다.
+                M365 Forms 만족도 조사 링크를 입력하세요. 나중에 추가할 수도 있습니다.{" "}
+                <a
+                  href="https://forms.office.com"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-primary hover:underline"
+                >
+                  아직 폼이 없으신가요? 새 폼 만들기 →
+                </a>
               </p>
             </div>
           </CardContent>
