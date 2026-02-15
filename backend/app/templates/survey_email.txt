@@ -1,0 +1,14 @@
+{{ workshop_name }} - 만족도 조사
+
+안녕하세요, {{ alias }}님!
+
+워크샵에 참여해 주셔서 감사합니다.
+더 나은 워크샵을 위해 만족도 조사에 참여해 주시면 감사하겠습니다.
+
+아래 링크를 클릭하여 간단한 만족도 조사에 참여해 주세요.
+소요 시간은 약 2~3분입니다.
+
+설문 링크: {{ survey_url }}
+
+본 메일은 Azure Workshop 참가자를 대상으로 발송됩니다.
+(c) Microsoft Corporation. All rights reserved.
