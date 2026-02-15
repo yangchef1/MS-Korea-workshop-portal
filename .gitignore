@@ -62,5 +62,11 @@ htmlcov/
 *.tmp
 *.bak
 
+# Build artifacts
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
+vite.config.ts.timestamp-*
+
 # Copilot instructions
 .github/copilot-instructions.md

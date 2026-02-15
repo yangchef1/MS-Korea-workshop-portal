@@ -66,6 +66,10 @@ class WorkshopCreate(BaseModel):
     end_date: str = Field(..., description="ISO 형식 날짜 (예: 2025-01-15T18:00)")
     base_resources_template: str
     policy: PolicySettings
+    survey_url: Optional[str] = Field(
+        default=None,
+        description="M365 Forms 만족도 조사 URL",
+    )
 
     @field_validator("start_date", "end_date")
     @classmethod
@@ -129,6 +133,7 @@ class WorkshopMetadata(BaseModel):
     status: str = "active"
     created_at: str = Field(..., min_length=1)
     created_by: Optional[str] = None
+    survey_url: Optional[str] = None
 
     @field_validator("status")
     @classmethod
@@ -171,6 +176,7 @@ class WorkshopDetail(BaseModel):
     total_cost: float = 0.0
     currency: str = "USD"
     cost_breakdown: Optional[list[dict]] = None
+    survey_url: Optional[str] = None
 
 
 class CostResponse(BaseModel):
@@ -189,6 +195,16 @@ class MessageResponse(BaseModel):
 
     message: str
     detail: Optional[str] = None
+
+
+class SurveyUrlUpdate(BaseModel):
+    """만족도 조사 URL 업데이트 요청."""
+
+    survey_url: str = Field(
+        ...,
+        min_length=1,
+        description="M365 Forms 만족도 조사 URL",
+    )
 
 
 class ErrorResponse(BaseModel):

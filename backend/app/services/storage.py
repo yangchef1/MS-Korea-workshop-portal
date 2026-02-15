@@ -662,6 +662,7 @@ def _workshop_to_entity(workshop_id: str, metadata: dict[str, Any]) -> dict[str,
         "status": metadata.get("status", "active"),
         "created_at": metadata.get("created_at", ""),
         "created_by": metadata.get("created_by", ""),
+        "survey_url": metadata.get("survey_url", ""),
         # JSON-serialized complex fields
         "participants_json": json.dumps(
             metadata.get("participants", []), default=str
@@ -681,6 +682,7 @@ def _entity_to_workshop(entity: dict[str, Any]) -> dict[str, Any]:
         "status": entity.get("status", "active"),
         "created_at": entity.get("created_at", ""),
         "created_by": entity.get("created_by"),
+        "survey_url": entity.get("survey_url", ""),
         "participants": json.loads(entity.get("participants_json", "[]")),
         "policy": json.loads(entity.get("policy_json", "{}")),
     }
