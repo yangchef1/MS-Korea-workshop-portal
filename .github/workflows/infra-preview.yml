@@ -1,0 +1,64 @@
+# =============================================================================
+# Infrastructure Preview — Bicep What-If on PRs
+# =============================================================================
+# Runs `az deployment sub what-if` and posts results as a PR comment.
+
+name: "Infra Preview"
+
+on:
+  pull_request:
+    paths:
+      - "infra/**"
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+jobs:
+  what-if:
+    name: Bicep What-If
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: What-If
+        id: whatif
+        run: |
+          OUTPUT=$(az deployment sub what-if \
+            --location koreacentral \
+            --template-file infra/main.bicep \
+            --parameters infra/parameters/dev.bicepparam \
+            spClientSecret='dummy' \
+            acsConnectionString='dummy' \
+            2>&1) || true
+          # Escape for GitHub Actions multiline output
+          echo "result<<EOF" >> $GITHUB_OUTPUT
+          echo "$OUTPUT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Comment on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const output = `### Bicep What-If Results
+
+            \`\`\`
+            ${{ steps.whatif.outputs.result }}
+            \`\`\`
+
+            > Triggered by commit ${{ github.sha }}`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output,
+            });

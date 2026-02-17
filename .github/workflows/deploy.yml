@@ -1,77 +1,131 @@
-name: Deploy to Azure App Service
+# =============================================================================
+# Deploy Pipeline: infra → (backend ∥ frontend)
+# =============================================================================
+# infra must succeed (or be skipped) before app jobs run.
+# backend and frontend run in parallel after infra.
+
+name: Deploy
 
 on:
   push:
-    branches:
-      - main
-    paths-ignore:
-      - '**.md'
-      - 'function/**'
-  pull_request:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
+    inputs:
+      deploy_infra:
+        description: "Force deploy infrastructure"
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write # OIDC
+  contents: read
 
 env:
+  AZURE_LOCATION: koreacentral
   ACR_NAME: ${{ vars.ACR_NAME }}
-  IMAGE_NAME: workshop-portal
+  CONTAINER_APP_NAME: ${{ vars.CONTAINER_APP_NAME }}
+  RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
+  SWA_NAME: ${{ vars.SWA_NAME }}
 
-# OIDC 토큰 발급을 위한 권한 설정 (Managed Identity 인증에 필수)
-permissions:
-  id-token: write   # OIDC 토큰 발급을 위해 필수
-  contents: read    # 소스 코드 체크아웃을 위해 필요
-
+# ---------------------------------------------------------------------------
+# Job: Infrastructure (Bicep)
+# ---------------------------------------------------------------------------
 jobs:
-  build-and-push:
+  infra:
+    name: Deploy Infrastructure
     runs-on: ubuntu-latest
-    
+    if: >-
+      github.event_name == 'workflow_dispatch' && github.event.inputs.deploy_infra == 'true'
+      || contains(github.event.head_commit.modified, 'infra/')
+    environment: ${{ github.ref == 'refs/heads/main' && 'prod' || 'dev' }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      # Azure OIDC 인증 - Managed Identity의 Federated Credential 사용
       - name: Azure Login (OIDC)
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}           # Managed Identity의 Client ID
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}           # Azure AD Tenant ID
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }} # Subscription ID
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      # ACR 로그인 - Azure CLI를 통해 토큰 기반 인증
-      - name: Login to Azure Container Registry
-        run: az acr login --name ${{ env.ACR_NAME }}
+      - name: Deploy Bicep
+        run: |
+          ENV_NAME=${{ github.ref == 'refs/heads/main' && 'prod' || 'dev' }}
+          az deployment sub create \
+            --location ${{ env.AZURE_LOCATION }} \
+            --template-file infra/main.bicep \
+            --parameters infra/parameters/${ENV_NAME}.bicepparam \
+            spClientSecret='${{ secrets.SP_CLIENT_SECRET }}' \
+            acsConnectionString='${{ secrets.ACS_CONNECTION_STRING }}'
 
-      - name: Extract metadata for Docker
-        id: meta
-        uses: docker/metadata-action@v5
+  # ---------------------------------------------------------------------------
+  # Job: Backend (Docker → ACR → Container Apps)
+  # ---------------------------------------------------------------------------
+  backend:
+    name: Deploy Backend
+    runs-on: ubuntu-latest
+    needs: [infra]
+    if: always() && !cancelled() && (needs.infra.result == 'success' || needs.infra.result == 'skipped')
+    environment: ${{ github.ref == 'refs/heads/main' && 'prod' || 'dev' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
         with:
-          images: ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}
-          tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=sha,prefix=
-            type=raw,value=latest,enable={{is_default_branch}}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
+      - name: Build & Push to ACR
+        run: |
+          az acr login --name ${{ env.ACR_NAME }}
+          IMAGE=${{ env.ACR_NAME }}.azurecr.io/workshop-backend:${{ github.sha }}
+          docker build -t $IMAGE -f Dockerfile .
+          docker push $IMAGE
+
+      - name: Update Container App
+        run: |
+          az containerapp update \
+            --name ${{ env.CONTAINER_APP_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --image ${{ env.ACR_NAME }}.azurecr.io/workshop-backend:${{ github.sha }}
+
+  # ---------------------------------------------------------------------------
+  # Job: Frontend (Build → SWA Deploy)
+  # ---------------------------------------------------------------------------
+  frontend:
+    name: Deploy Frontend
+    runs-on: ubuntu-latest
+    needs: [infra]
+    if: always() && !cancelled() && (needs.infra.result == 'success' || needs.infra.result == 'skipped')
+    environment: ${{ github.ref == 'refs/heads/main' && 'prod' || 'dev' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          context: .
-          file: ./Dockerfile
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          platforms: linux/amd64
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
-      - name: Output image digest
-        if: ${{ github.event_name != 'pull_request' }}
-        run: echo "Image pushed with digest ${{ steps.meta.outputs.tags }}"
-      
-      # Azure 로그아웃 (보안을 위해 세션 정리)
-      - name: Azure Logout
-        if: always()
-        run: az logout
+      - name: Install & Build
+        working-directory: frontend
+        env:
+          VITE_AZURE_CLIENT_ID: ${{ vars.VITE_AZURE_CLIENT_ID }}
+          VITE_AZURE_TENANT_ID: ${{ vars.VITE_AZURE_TENANT_ID }}
+          VITE_AZURE_REDIRECT_URI: ${{ vars.VITE_AZURE_REDIRECT_URI }}
+        run: |
+          npm ci
+          npm run build
+
+      - name: Deploy to SWA
+        uses: azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.SWA_DEPLOYMENT_TOKEN }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: upload
+          app_location: frontend/dist
+          skip_app_build: true
+          skip_api_build: true
