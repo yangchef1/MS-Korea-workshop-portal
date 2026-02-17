@@ -15,9 +15,30 @@ import os
 
 app = func.FunctionApp()
 
-AZURE_SUBSCRIPTION_ID = os.getenv("AZURE_SUBSCRIPTION_ID")
+# Multi-subscription support: prefer ALLOWED_SUBSCRIPTION_IDS, fall back to legacy single-sub env var
+_ALLOWED_SUBS_RAW = os.getenv("ALLOWED_SUBSCRIPTION_IDS", "")
+_LEGACY_SUB = os.getenv("AZURE_SUBSCRIPTION_ID", "")
+ALLOWED_SUBSCRIPTION_IDS = [
+    s.strip() for s in _ALLOWED_SUBS_RAW.split(",") if s.strip()
+] or ([_LEGACY_SUB] if _LEGACY_SUB else [])
+DEFAULT_SUBSCRIPTION_ID = ALLOWED_SUBSCRIPTION_IDS[0] if ALLOWED_SUBSCRIPTION_IDS else ""
+
 AZURE_DOMAIN = os.getenv("AZURE_DOMAIN")
 TABLE_STORAGE_ACCOUNT = os.getenv("TABLE_STORAGE_ACCOUNT")
+
+# Per-subscription ResourceManagementClient cache
+_resource_clients: dict[str, ResourceManagementClient] = {}
+
+
+def get_resource_client(
+    credential: DefaultAzureCredential, subscription_id: str
+) -> ResourceManagementClient:
+    """Return a cached ResourceManagementClient for the given subscription."""
+    if subscription_id not in _resource_clients:
+        _resource_clients[subscription_id] = ResourceManagementClient(
+            credential=credential, subscription_id=subscription_id
+        )
+    return _resource_clients[subscription_id]
 
 WORKSHOPS_TABLE = "workshops"
 PASSWORDS_TABLE = "passwords"
@@ -55,7 +76,7 @@ async def workshop_cleanup(timer: func.TimerRequest) -> None:
 
         resource_client = ResourceManagementClient(
             credential=credential,
-            subscription_id=AZURE_SUBSCRIPTION_ID
+            subscription_id=DEFAULT_SUBSCRIPTION_ID
         )
 
         graph_client = GraphServiceClient(
@@ -95,7 +116,7 @@ async def workshop_cleanup(timer: func.TimerRequest) -> None:
         for workshop in workshops_to_cleanup:
             result = await cleanup_workshop(
                 workshop,
-                resource_client,
+                credential,
                 graph_client,
                 workshops_table,
                 passwords_table
@@ -112,7 +133,7 @@ async def workshop_cleanup(timer: func.TimerRequest) -> None:
 
 async def cleanup_workshop(
     workshop: dict,
-    resource_client: ResourceManagementClient,
+    credential: DefaultAzureCredential,
     graph_client: GraphServiceClient,
     workshops_table,
     passwords_table
@@ -120,9 +141,12 @@ async def cleanup_workshop(
     """
     Cleanup a single workshop and its resources.
 
+    Uses per-participant subscription_id to select the correct
+    ResourceManagementClient for each resource group deletion.
+
     Args:
         workshop: Workshop metadata.
-        resource_client: Azure Resource Manager client.
+        credential: Azure credential for creating per-sub clients.
         graph_client: Microsoft Graph client.
         workshops_table: Table client for workshops table.
         passwords_table: Table client for passwords table.
@@ -147,7 +171,14 @@ async def cleanup_workshop(
         rg_names = [p.get('resource_group') for p in participants if p.get('resource_group')]
         if rg_names:
             logger.info(f"Deleting {len(rg_names)} resource groups...")
-            rg_tasks = [delete_resource_group(resource_client, rg) for rg in rg_names]
+            rg_tasks = []
+            for p in participants:
+                rg_name = p.get('resource_group')
+                if not rg_name:
+                    continue
+                sub_id = p.get('subscription_id') or DEFAULT_SUBSCRIPTION_ID
+                client = get_resource_client(credential, sub_id)
+                rg_tasks.append(delete_resource_group(client, rg_name))
             rg_results = await asyncio.gather(*rg_tasks, return_exceptions=True)
 
             for i, rg_result in enumerate(rg_results):
