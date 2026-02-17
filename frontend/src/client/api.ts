@@ -238,7 +238,7 @@ export interface Workshop {
   id: string
   name: string
   description?: string
-  status: "active" | "completed" | "draft"
+  status: "active" | "completed" | "draft" | "failed" | "deleted"
   region?: string
   start_date: string
   end_date: string
@@ -325,6 +325,29 @@ export interface ResourceType {
   value: string
   label: string
   category: string
+}
+
+/** Deletion failure resource type. */
+export type DeletionFailureResourceType = "resource_group" | "user"
+
+/** A single deletion failure record. */
+export interface DeletionFailure {
+  id: string
+  workshop_id: string
+  workshop_name: string
+  resource_type: DeletionFailureResourceType
+  resource_name: string
+  subscription_id?: string
+  error_message: string
+  failed_at: string
+  status: "pending" | "resolved"
+  retry_count: number
+}
+
+/** Response for listing deletion failures. */
+export interface DeletionFailureListResponse {
+  items: DeletionFailure[]
+  total_count: number
 }
 
 export interface CreateWorkshopRequest {
@@ -449,6 +472,37 @@ export const workshopApi = {
       `/workshops/${id}/send-survey`,
       null,
       { params }
+    )
+    return response.data
+  },
+
+  /** 워크샵의 삭제 실패 항목 목록을 조회한다. */
+  getDeletionFailures: async (
+    id: string
+  ): Promise<DeletionFailureListResponse> => {
+    const response = await apiClient.get<DeletionFailureListResponse>(
+      `/workshops/${id}/deletion-failures`
+    )
+    return response.data
+  },
+
+  /** 삭제 실패 항목을 수동으로 재시도한다. */
+  retryDeletion: async (
+    workshopId: string,
+    failureId: string
+  ): Promise<{ message: string; detail?: string }> => {
+    const response = await apiClient.post(
+      `/workshops/${workshopId}/deletion-failures/${failureId}/retry`
+    )
+    return response.data
+  },
+
+  /** 워크샵의 모든 삭제 실패 항목을 일괄 재시도한다. */
+  retryAllDeletions: async (
+    workshopId: string
+  ): Promise<{ message: string; detail?: string }> => {
+    const response = await apiClient.post(
+      `/workshops/${workshopId}/deletion-failures/retry-all`
     )
     return response.data
   },
