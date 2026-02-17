@@ -6,6 +6,7 @@ import azure.functions as func
 import logging
 import json
 import asyncio
+import uuid
 from datetime import datetime, timezone
 from azure.identity import DefaultAzureCredential
 from azure.data.tables import TableServiceClient
@@ -42,6 +43,7 @@ def get_resource_client(
 
 WORKSHOPS_TABLE = "workshops"
 PASSWORDS_TABLE = "passwords"
+DELETION_FAILURES_TABLE = "deletionfailures"
 WORKSHOP_PARTITION_KEY = "workshop"
 PASSWORD_PARTITION_KEY = "password"
 
@@ -73,6 +75,7 @@ async def workshop_cleanup(timer: func.TimerRequest) -> None:
         )
         workshops_table = table_service_client.get_table_client(WORKSHOPS_TABLE)
         passwords_table = table_service_client.get_table_client(PASSWORDS_TABLE)
+        failures_table = table_service_client.get_table_client(DELETION_FAILURES_TABLE)
 
         resource_client = ResourceManagementClient(
             credential=credential,
@@ -119,7 +122,8 @@ async def workshop_cleanup(timer: func.TimerRequest) -> None:
                 credential,
                 graph_client,
                 workshops_table,
-                passwords_table
+                passwords_table,
+                failures_table,
             )
             cleanup_results.append(result)
 
@@ -136,7 +140,8 @@ async def cleanup_workshop(
     credential: DefaultAzureCredential,
     graph_client: GraphServiceClient,
     workshops_table,
-    passwords_table
+    passwords_table,
+    failures_table,
 ) -> dict:
     """
     Cleanup a single workshop and its resources.
@@ -150,6 +155,7 @@ async def cleanup_workshop(
         graph_client: Microsoft Graph client.
         workshops_table: Table client for workshops table.
         passwords_table: Table client for passwords table.
+        failures_table: Table client for deletionfailures table.
 
     Returns:
         Dictionary with cleanup results.
@@ -167,6 +173,14 @@ async def cleanup_workshop(
     try:
         participants = workshop.get('participants', [])
         logger.info(f"Cleaning up workshop {workshop_name} with {len(participants)} participants")
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        # Build participant lookup for subscription_id
+        rg_to_subscription = {
+            p.get('resource_group'): p.get('subscription_id', '')
+            for p in participants
+            if p.get('resource_group')
+        }
 
         rg_names = [p.get('resource_group') for p in participants if p.get('resource_group')]
         if rg_names:
@@ -183,8 +197,19 @@ async def cleanup_workshop(
 
             for i, rg_result in enumerate(rg_results):
                 if isinstance(rg_result, Exception):
-                    logger.error(f"Failed to delete RG {rg_names[i]}: {rg_result}")
-                    result['errors'].append(f"RG deletion failed: {rg_names[i]}")
+                    rg_name = rg_names[i]
+                    logger.error(f"Failed to delete RG {rg_name}: {rg_result}")
+                    result['errors'].append(f"RG deletion failed: {rg_name}")
+                    _save_failure_entity(
+                        failures_table,
+                        workshop_id=workshop_id,
+                        workshop_name=workshop_name,
+                        resource_type="resource_group",
+                        resource_name=rg_name,
+                        subscription_id=rg_to_subscription.get(rg_name, ""),
+                        error_message=str(rg_result),
+                        failed_at=now_iso,
+                    )
 
         upns = [p.get('upn') for p in participants if p.get('upn')]
         if upns:
@@ -194,40 +219,101 @@ async def cleanup_workshop(
 
             for i, user_result in enumerate(user_results):
                 if isinstance(user_result, Exception):
-                    logger.error(f"Failed to delete user {upns[i]}: {user_result}")
-                    result['errors'].append(f"User deletion failed: {upns[i]}")
+                    upn = upns[i]
+                    logger.error(f"Failed to delete user {upn}: {user_result}")
+                    result['errors'].append(f"User deletion failed: {upn}")
+                    _save_failure_entity(
+                        failures_table,
+                        workshop_id=workshop_id,
+                        workshop_name=workshop_name,
+                        resource_type="user",
+                        resource_name=upn,
+                        subscription_id="",
+                        error_message=str(user_result),
+                        failed_at=now_iso,
+                    )
 
-        try:
-            workshops_table.delete_entity(
-                partition_key=WORKSHOP_PARTITION_KEY,
-                row_key=workshop_id,
-            )
-            logger.info(f"Deleted workshop metadata: {workshop_id}")
-
+        if result['errors']:
+            # Partial failure — keep metadata, update status to 'failed'
             try:
-                passwords_table.delete_entity(
-                    partition_key=PASSWORD_PARTITION_KEY,
+                entity = workshops_table.get_entity(
+                    partition_key=WORKSHOP_PARTITION_KEY,
                     row_key=workshop_id,
                 )
-                logger.info(f"Deleted passwords entity: {workshop_id}")
+                entity['status'] = 'failed'
+                workshops_table.update_entity(entity, mode='merge')
+                logger.warning(
+                    f"Workshop {workshop_name} status set to 'failed' "
+                    f"with {len(result['errors'])} errors"
+                )
             except Exception as e:
-                logger.warning(f"Failed to delete passwords entity: {e}")
-
-        except Exception as e:
-            logger.error(f"Failed to delete workshop metadata: {e}")
-            result['errors'].append(f"Metadata deletion failed: {str(e)}")
-
-        if len(result['errors']) == 0:
-            result['success'] = True
-            logger.info(f"Successfully cleaned up workshop {workshop_name}")
+                logger.error(f"Failed to update workshop status: {e}")
+                result['errors'].append(f"Status update failed: {str(e)}")
         else:
-            logger.warning(f"Cleaned up workshop {workshop_name} with {len(result['errors'])} errors")
+            # Full success — delete metadata and passwords
+            try:
+                workshops_table.delete_entity(
+                    partition_key=WORKSHOP_PARTITION_KEY,
+                    row_key=workshop_id,
+                )
+                logger.info(f"Deleted workshop metadata: {workshop_id}")
+
+                try:
+                    passwords_table.delete_entity(
+                        partition_key=PASSWORD_PARTITION_KEY,
+                        row_key=workshop_id,
+                    )
+                    logger.info(f"Deleted passwords entity: {workshop_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to delete passwords entity: {e}")
+
+            except Exception as e:
+                logger.error(f"Failed to delete workshop metadata: {e}")
+                result['errors'].append(f"Metadata deletion failed: {str(e)}")
+
+        result['success'] = len(result['errors']) == 0
+        if result['success']:
+            logger.info(f"Successfully cleaned up workshop {workshop_name}")
 
     except Exception as e:
         logger.error(f"Failed to cleanup workshop {workshop_name}: {e}")
         result['errors'].append(str(e))
 
     return result
+
+
+def _save_failure_entity(
+    failures_table,
+    *,
+    workshop_id: str,
+    workshop_name: str,
+    resource_type: str,
+    resource_name: str,
+    subscription_id: str,
+    error_message: str,
+    failed_at: str,
+) -> None:
+    """Save a deletion failure record to Table Storage (sync)."""
+    try:
+        entity = {
+            "PartitionKey": workshop_id,
+            "RowKey": str(uuid.uuid4()),
+            "workshop_name": workshop_name,
+            "resource_type": resource_type,
+            "resource_name": resource_name,
+            "subscription_id": subscription_id,
+            "error_message": error_message[:1000],  # Truncate long messages
+            "failed_at": failed_at,
+            "status": "pending",
+            "retry_count": 0,
+        }
+        failures_table.upsert_entity(entity)
+        logger.info(
+            f"Saved deletion failure: {resource_type} '{resource_name}' "
+            f"(workshop: {workshop_id})"
+        )
+    except Exception as e:
+        logger.error(f"Failed to save deletion failure record: {e}")
 
 
 async def delete_resource_group(resource_client: ResourceManagementClient, rg_name: str) -> bool:
