@@ -21,11 +21,18 @@ logger = logging.getLogger(__name__)
 # SPA 정적 파일 경로
 STATIC_DIR = Path(__file__).parent.parent.parent / "static"
 
-# CORS 허용 오리진
-_ALLOWED_ORIGINS = [
+# CORS 허용 오리진: 환경변수에서 콤마 구분 파싱 + 로컬 개발용 기본값
+_LOCAL_ORIGINS = [
     "http://localhost:5173",
+    "http://localhost:4280",
     "http://localhost:3000",
 ]
+_env_origins = [
+    o.strip()
+    for o in (settings.allowed_origins or "").split(",")
+    if o.strip()
+]
+_ALLOWED_ORIGINS = list(set(_LOCAL_ORIGINS + _env_origins))
 
 
 @asynccontextmanager
