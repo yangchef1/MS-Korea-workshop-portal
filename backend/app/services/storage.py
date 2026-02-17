@@ -24,7 +24,7 @@ from pydantic import ValidationError as PydanticValidationError
 
 from app.config import settings
 from app.exceptions import ValidationError as AppValidationError
-from app.models import WorkshopMetadata
+from app.models import DeletionFailureItem, WorkshopMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +32,7 @@ WORKSHOPS_TABLE = "workshops"
 PASSWORDS_TABLE = "passwords"
 TEMPLATES_TABLE = "templates"
 USERS_TABLE = "users"
+DELETION_FAILURES_TABLE = "deletionfailures"
 
 WORKSHOP_PARTITION_KEY = "workshop"
 PASSWORD_PARTITION_KEY = "password"
@@ -90,7 +91,7 @@ class StorageService:
         """필요한 테이블이 존재하지 않으면 생성한다 (lazy 초기화)."""
         if StorageService._tables_initialized:
             return
-        for table_name in (WORKSHOPS_TABLE, PASSWORDS_TABLE, TEMPLATES_TABLE, USERS_TABLE):
+        for table_name in (WORKSHOPS_TABLE, PASSWORDS_TABLE, TEMPLATES_TABLE, USERS_TABLE, DELETION_FAILURES_TABLE):
             try:
                 await self.table_service_client.create_table_if_not_exists(table_name)
                 logger.info("Ensured table exists: %s", table_name)
@@ -641,6 +642,133 @@ class StorageService:
         logger.info("Deleted template: %s", template_name)
 
 
+    # ------------------------------------------------------------------
+    # Deletion failures
+    # ------------------------------------------------------------------
+
+    async def save_deletion_failure(self, failure: DeletionFailureItem) -> bool:
+        """삭제 실패 항목을 저장한다.
+
+        Args:
+            failure: 삭제 실패 항목.
+
+        Returns:
+            성공 시 True.
+        """
+        await self._ensure_tables_exist()
+
+        try:
+            table_client = self.table_service_client.get_table_client(
+                DELETION_FAILURES_TABLE
+            )
+            entity = _failure_to_entity(failure)
+            await table_client.upsert_entity(entity)
+            logger.info(
+                "Saved deletion failure: %s (workshop: %s)",
+                failure.id,
+                failure.workshop_id,
+            )
+            return True
+        except Exception as e:
+            logger.error("Failed to save deletion failure: %s", e)
+            raise
+
+    async def list_deletion_failures_by_workshop(
+        self, workshop_id: str
+    ) -> list[DeletionFailureItem]:
+        """워크샵별 삭제 실패 항목을 조회한다.
+
+        PK=workshop_id 단일 파티션 쿼리로 최적화된다.
+
+        Args:
+            workshop_id: 워크샵 고유 식별자.
+
+        Returns:
+            삭제 실패 항목 목록 (failed_at 내림차순).
+        """
+        await self._ensure_tables_exist()
+
+        try:
+            table_client = self.table_service_client.get_table_client(
+                DELETION_FAILURES_TABLE
+            )
+            query_filter = f"PartitionKey eq '{workshop_id}'"
+            failures = [
+                _entity_to_failure(e)
+                async for e in table_client.query_entities(query_filter)
+            ]
+            failures.sort(
+                key=lambda x: x.get("failed_at", ""), reverse=True
+            )
+            return failures
+        except Exception as e:
+            logger.error(
+                "Failed to list deletion failures for workshop %s: %s",
+                workshop_id,
+                e,
+            )
+            raise
+
+    async def update_deletion_failure(
+        self, failure_id: str, workshop_id: str, updates: dict[str, Any]
+    ) -> bool:
+        """삭제 실패 항목을 부분 업데이트한다.
+
+        Args:
+            failure_id: 실패 항목 ID (RowKey).
+            workshop_id: 워크샵 ID (PartitionKey).
+            updates: 업데이트할 필드 딕셔너리.
+
+        Returns:
+            성공 시 True.
+        """
+        await self._ensure_tables_exist()
+
+        try:
+            table_client = self.table_service_client.get_table_client(
+                DELETION_FAILURES_TABLE
+            )
+            entity = {
+                "PartitionKey": workshop_id,
+                "RowKey": failure_id,
+                **updates,
+            }
+            await table_client.update_entity(entity, mode="merge")
+            logger.info("Updated deletion failure: %s", failure_id)
+            return True
+        except Exception as e:
+            logger.error("Failed to update deletion failure %s: %s", failure_id, e)
+            raise
+
+    async def delete_deletion_failure(
+        self, failure_id: str, workshop_id: str
+    ) -> bool:
+        """삭제 실패 항목을 제거한다.
+
+        Args:
+            failure_id: 실패 항목 ID (RowKey).
+            workshop_id: 워크샵 ID (PartitionKey).
+
+        Returns:
+            성공 시 True.
+        """
+        await self._ensure_tables_exist()
+
+        try:
+            table_client = self.table_service_client.get_table_client(
+                DELETION_FAILURES_TABLE
+            )
+            await table_client.delete_entity(
+                partition_key=workshop_id,
+                row_key=failure_id,
+            )
+            logger.info("Deleted deletion failure: %s", failure_id)
+            return True
+        except Exception as e:
+            logger.error("Failed to delete deletion failure %s: %s", failure_id, e)
+            raise
+
+
 # ------------------------------------------------------------------
 # Entity ↔ Dict conversion helpers
 # ------------------------------------------------------------------
@@ -685,6 +813,38 @@ def _entity_to_workshop(entity: dict[str, Any]) -> dict[str, Any]:
         "survey_url": entity.get("survey_url", ""),
         "participants": json.loads(entity.get("participants_json", "[]")),
         "policy": json.loads(entity.get("policy_json", "{}")),
+    }
+
+
+def _failure_to_entity(failure: DeletionFailureItem) -> dict[str, Any]:
+    """DeletionFailureItem을 Table Storage 엔티티로 변환한다."""
+    return {
+        "PartitionKey": failure.workshop_id,
+        "RowKey": failure.id,
+        "workshop_name": failure.workshop_name,
+        "resource_type": failure.resource_type,
+        "resource_name": failure.resource_name,
+        "subscription_id": failure.subscription_id or "",
+        "error_message": failure.error_message,
+        "failed_at": failure.failed_at,
+        "status": failure.status,
+        "retry_count": failure.retry_count,
+    }
+
+
+def _entity_to_failure(entity: dict[str, Any]) -> dict[str, Any]:
+    """Table Storage 엔티티를 삭제 실패 항목 dict로 변환한다."""
+    return {
+        "id": entity["RowKey"],
+        "workshop_id": entity["PartitionKey"],
+        "workshop_name": entity.get("workshop_name", ""),
+        "resource_type": entity.get("resource_type", ""),
+        "resource_name": entity.get("resource_name", ""),
+        "subscription_id": entity.get("subscription_id") or None,
+        "error_message": entity.get("error_message", ""),
+        "failed_at": entity.get("failed_at", ""),
+        "status": entity.get("status", "pending"),
+        "retry_count": int(entity.get("retry_count", 0)),
     }
 
 
