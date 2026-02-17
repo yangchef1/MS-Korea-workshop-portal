@@ -3,7 +3,8 @@
   "Values": {
     "AzureWebJobsStorage": "UseDevelopmentStorage=true",
     "FUNCTIONS_WORKER_RUNTIME": "python",
-    "AZURE_SUBSCRIPTION_ID": "your-subscription-id",
+    "ALLOWED_SUBSCRIPTION_IDS": "your-subscription-id-1,your-subscription-id-2",
+    "AZURE_SUBSCRIPTION_ID": "your-subscription-id (deprecated, use ALLOWED_SUBSCRIPTION_IDS)",
     "AZURE_DOMAIN": "yourdomain.com",
     "TABLE_STORAGE_ACCOUNT": "workshopstorage"
   }
