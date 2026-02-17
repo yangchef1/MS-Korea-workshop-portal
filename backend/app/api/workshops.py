@@ -264,9 +264,10 @@ async def _setup_participant(
                     subscription_id=subscription_id,
                 )
 
-        subscription_scope = f"/subscriptions/{subscription_id}"
+        # Policy scope: resource group level to isolate participants in the same subscription
+        rg_scope = f"/subscriptions/{subscription_id}/resourceGroups/{rg_result['name']}"
         await policy.assign_workshop_policies(
-            scope=subscription_scope,
+            scope=rg_scope,
             allowed_locations=regions,
             allowed_resource_types=services,
             subscription_id=subscription_id,
@@ -303,7 +304,7 @@ async def create_workshop(
 ):
     """새 워크샵을 생성한다.
 
-    CSV 형식: 이메일 주소만 포함하는 단일 컬럼.
+    CSV 형식: 이메일만 포함하는 단일 컬럼 또는 이메일+subscription_id 2컬럼.
     Azure 리소스 생성 후 DB 저장이 실패하면 보상 트랜잭션(rollback)을 수행한다.
     """
     created_users: list[dict] = []
@@ -330,8 +331,12 @@ async def create_workshop(
         created_users = user_results
 
         alias_to_email = {p["alias"]: p["email"] for p in participants}
+        alias_to_sub = {p["alias"]: p["subscription_id"] for p in participants}
         for user in user_results:
             user["email"] = alias_to_email.get(user["alias"], "")
+            user["subscription_id"] = alias_to_sub.get(
+                user["alias"], settings.azure_sp_subscription_id
+            )
 
         # Step 2: 리소스 그룹 생성
         rg_specs = [

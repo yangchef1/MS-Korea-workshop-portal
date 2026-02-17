@@ -21,6 +21,12 @@ class Settings(BaseSettings):
     azure_sp_domain: str = os.getenv("AZURE_SP_DOMAIN", "yourdomain.com")
     azure_sp_subscription_id: str = os.getenv("AZURE_SP_SUBSCRIPTION_ID", "")
 
+    # Multi-subscription support: comma-separated list of allowed subscription IDs
+    allowed_subscription_ids_raw: str = os.getenv("ALLOWED_SUBSCRIPTION_IDS", "")
+
+    # CORS: comma-separated production origins (local origins added automatically)
+    allowed_origins: str = os.getenv("ALLOWED_ORIGINS", "")
+
     session_secret_key: str = os.getenv("SESSION_SECRET_KEY", "change-this-secret-key-in-production")
 
     table_storage_account: str = os.getenv("TABLE_STORAGE_ACCOUNT", "workshopstorage")
@@ -133,6 +139,20 @@ class Settings(BaseSettings):
     azure_retry_backoff_factor: float = 1.0
 
     model_config = {"env_file": ".env", "case_sensitive": False, "extra": "ignore"}
+
+    @property
+    def allowed_subscription_ids(self) -> list[str]:
+        """Parse ALLOWED_SUBSCRIPTION_IDS into a list, falling back to the default SP subscription."""
+        parsed = [
+            s.strip()
+            for s in self.allowed_subscription_ids_raw.split(",")
+            if s.strip()
+        ]
+        return parsed if parsed else ([self.azure_sp_subscription_id] if self.azure_sp_subscription_id else [])
+
+    def is_valid_subscription(self, subscription_id: str) -> bool:
+        """Check whether a subscription ID is in the allowed list."""
+        return subscription_id in self.allowed_subscription_ids
 
 
 settings = Settings()
