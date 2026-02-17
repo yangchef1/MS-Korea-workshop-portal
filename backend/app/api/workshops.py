@@ -25,6 +25,8 @@ from app.core.deps import (
 from app.exceptions import InvalidInputError, NotFoundError
 from app.models import (
     CostResponse,
+    DeletionFailureItem,
+    DeletionFailureListResponse,
     MessageResponse,
     PolicyData,
     SurveyUrlUpdate,
@@ -435,10 +437,15 @@ async def delete_workshop(
     entra_id=Depends(get_entra_id_service),
     resource_mgr=Depends(get_resource_manager_service),
 ):
-    """워크샵과 관련 리소스를 모두 삭제한다 (구독별 지원)."""
+    """워크샵과 관련 리소스를 모두 삭제한다 (구독별 지원).
+
+    삭제 실패 항목이 있으면 status를 'failed'로 변경하고 메타데이터를 유지한다.
+    """
     metadata = await _get_workshop_or_raise(storage, workshop_id)
     participants = metadata.get("participants", [])
+    workshop_name = metadata.get("name", "")
 
+    # Step 1: 리소스 그룹 삭제
     rg_specs = [
         {
             "name": p.get("resource_group"),
@@ -446,11 +453,75 @@ async def delete_workshop(
         }
         for p in participants
     ]
-    await resource_mgr.delete_resource_groups_bulk(rg_specs)
+    rg_status = await resource_mgr.delete_resource_groups_bulk(rg_specs)
 
+    # Step 2: Entra ID 사용자 삭제
     upns = [p.get("upn") for p in participants]
-    await entra_id.delete_users_bulk(upns)
+    user_status = await entra_id.delete_users_bulk(upns)
 
+    # Step 3: 실패 항목 추적
+    failures: list[DeletionFailureItem] = []
+    now_iso = datetime.now(UTC).isoformat()
+
+    for spec in rg_specs:
+        rg_name = spec["name"]
+        if rg_name and not rg_status.get(rg_name, False):
+            failures.append(
+                DeletionFailureItem(
+                    id=str(uuid.uuid4()),
+                    workshop_id=workshop_id,
+                    workshop_name=workshop_name,
+                    resource_type="resource_group",
+                    resource_name=rg_name,
+                    subscription_id=spec.get("subscription_id"),
+                    error_message=f"Failed to delete resource group '{rg_name}'",
+                    failed_at=now_iso,
+                    status="pending",
+                    retry_count=0,
+                )
+            )
+
+    for p in participants:
+        upn = p.get("upn")
+        if upn and not user_status.get(upn, False):
+            failures.append(
+                DeletionFailureItem(
+                    id=str(uuid.uuid4()),
+                    workshop_id=workshop_id,
+                    workshop_name=workshop_name,
+                    resource_type="user",
+                    resource_name=upn,
+                    subscription_id=None,
+                    error_message=f"Failed to delete user '{upn}'",
+                    failed_at=now_iso,
+                    status="pending",
+                    retry_count=0,
+                )
+            )
+
+    if failures:
+        # 실패 항목 저장 및 status 변경
+        for failure in failures:
+            await storage.save_deletion_failure(failure)
+
+        metadata["status"] = "failed"
+        await storage.save_workshop_metadata(workshop_id, metadata)
+
+        logger.warning(
+            "Workshop %s deletion partially failed: %d failures",
+            workshop_id,
+            len(failures),
+        )
+
+        return MessageResponse(
+            message="Workshop deletion partially failed",
+            detail=(
+                f"{len(failures)} resource(s) failed to delete. "
+                "Check the deletion failures tab for details."
+            ),
+        )
+
+    # 전부 성공 → 메타데이터 삭제
     await storage.delete_workshop_metadata(workshop_id)
 
     logger.info("Workshop deleted: %s", workshop_id)
@@ -458,6 +529,201 @@ async def delete_workshop(
     return MessageResponse(
         message="Workshop deleted successfully",
         detail=f"Deleted {len(participants)} participants and their resources",
+    )
+
+
+# ------------------------------------------------------------------
+# Deletion failure endpoints
+# ------------------------------------------------------------------
+
+
+@router.get(
+    "/{workshop_id}/deletion-failures",
+    response_model=DeletionFailureListResponse,
+)
+async def list_deletion_failures(
+    workshop_id: str,
+    storage=Depends(get_storage_service),
+):
+    """워크샵의 삭제 실패 항목 목록을 조회한다."""
+    await _get_workshop_or_raise(storage, workshop_id)
+
+    items = await storage.list_deletion_failures_by_workshop(workshop_id)
+
+    return DeletionFailureListResponse(
+        items=[DeletionFailureItem(**item) for item in items],
+        total_count=len(items),
+    )
+
+
+async def _retry_single_failure(
+    failure: dict,
+    workshop_id: str,
+    storage,
+    resource_mgr,
+    entra_id,
+) -> bool:
+    """단일 삭제 실패 항목에 대해 재시도를 수행한다.
+
+    성공 시 failure 레코드를 삭제하고 True를 반환한다.
+    실패 시 retry_count를 증가시키고 False를 반환한다.
+
+    Args:
+        failure: 삭제 실패 항목 dict.
+        workshop_id: 워크샵 ID.
+        storage: StorageService 인스턴스.
+        resource_mgr: ResourceManagerService 인스턴스.
+        entra_id: EntraIDService 인스턴스.
+
+    Returns:
+        재시도 성공 여부.
+    """
+    failure_id = failure["id"]
+    resource_type = failure["resource_type"]
+    resource_name = failure["resource_name"]
+
+    try:
+        if resource_type == "resource_group":
+            await resource_mgr.delete_resource_group(
+                name=resource_name,
+                subscription_id=failure.get("subscription_id"),
+            )
+        elif resource_type == "user":
+            await entra_id.delete_user(resource_name)
+
+        await storage.delete_deletion_failure(failure_id, workshop_id)
+        logger.info(
+            "Retry succeeded for %s '%s' (workshop: %s)",
+            resource_type,
+            resource_name,
+            workshop_id,
+        )
+        return True
+
+    except Exception as e:
+        logger.error(
+            "Retry failed for %s '%s': %s",
+            resource_type,
+            resource_name,
+            e,
+        )
+        await storage.update_deletion_failure(
+            failure_id,
+            workshop_id,
+            {
+                "retry_count": failure.get("retry_count", 0) + 1,
+                "error_message": str(e),
+            },
+        )
+        return False
+
+
+async def _finalize_workshop_if_resolved(
+    workshop_id: str, storage
+) -> bool:
+    """워크샵의 모든 삭제 실패가 해결되었으면 메타데이터를 정리한다.
+
+    Args:
+        workshop_id: 워크샵 ID.
+        storage: StorageService 인스턴스.
+
+    Returns:
+        워크샵이 정리되었으면 True.
+    """
+    remaining = await storage.list_deletion_failures_by_workshop(workshop_id)
+    if remaining:
+        return False
+
+    await storage.delete_workshop_metadata(workshop_id)
+    logger.info(
+        "All failures resolved — workshop %s metadata deleted",
+        workshop_id,
+    )
+    return True
+
+
+@router.post(
+    "/{workshop_id}/deletion-failures/{failure_id}/retry",
+    response_model=MessageResponse,
+)
+async def retry_deletion(
+    workshop_id: str,
+    failure_id: str,
+    storage=Depends(get_storage_service),
+    resource_mgr=Depends(get_resource_manager_service),
+    entra_id=Depends(get_entra_id_service),
+):
+    """삭제 실패 항목을 수동으로 재시도한다."""
+    await _get_workshop_or_raise(storage, workshop_id)
+
+    items = await storage.list_deletion_failures_by_workshop(workshop_id)
+    failure = next((f for f in items if f["id"] == failure_id), None)
+    if not failure:
+        raise NotFoundError(
+            f"Deletion failure '{failure_id}' not found in workshop '{workshop_id}'",
+            resource_type="DeletionFailure",
+        )
+
+    success = await _retry_single_failure(
+        failure, workshop_id, storage, resource_mgr, entra_id
+    )
+
+    if success:
+        workshop_finalized = await _finalize_workshop_if_resolved(
+            workshop_id, storage
+        )
+        detail = "Resource deleted successfully"
+        if workshop_finalized:
+            detail += ". All failures resolved — workshop cleaned up."
+        return MessageResponse(message="Retry succeeded", detail=detail)
+
+    return MessageResponse(
+        message="Retry failed",
+        detail="The resource could not be deleted. Check error details.",
+    )
+
+
+@router.post(
+    "/{workshop_id}/deletion-failures/retry-all",
+    response_model=MessageResponse,
+)
+async def retry_all_deletions(
+    workshop_id: str,
+    storage=Depends(get_storage_service),
+    resource_mgr=Depends(get_resource_manager_service),
+    entra_id=Depends(get_entra_id_service),
+):
+    """워크샵의 모든 삭제 실패 항목을 일괄 재시도한다."""
+    await _get_workshop_or_raise(storage, workshop_id)
+
+    items = await storage.list_deletion_failures_by_workshop(workshop_id)
+    if not items:
+        return MessageResponse(
+            message="No failures to retry",
+            detail="There are no pending deletion failures for this workshop.",
+        )
+
+    succeeded = 0
+    failed = 0
+    for failure in items:
+        ok = await _retry_single_failure(
+            failure, workshop_id, storage, resource_mgr, entra_id
+        )
+        if ok:
+            succeeded += 1
+        else:
+            failed += 1
+
+    workshop_finalized = await _finalize_workshop_if_resolved(
+        workshop_id, storage
+    )
+    detail = f"{succeeded} succeeded, {failed} failed"
+    if workshop_finalized:
+        detail += ". All failures resolved — workshop cleaned up."
+
+    return MessageResponse(
+        message="Retry all completed",
+        detail=detail,
     )
 
 
