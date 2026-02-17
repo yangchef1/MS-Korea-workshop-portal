@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router"
 import { useSuspenseQuery } from "@tanstack/react-query"
 import { Suspense } from "react"
 import { Link } from "@tanstack/react-router"
-import { Plus, Calendar, Users, MapPin } from "lucide-react"
+import { Plus, Calendar, Users, MapPin, AlertCircle } from "lucide-react"
 
 import { workshopApi, type Workshop } from "@/client"
 import { Button } from "@/components/ui/button"
@@ -27,10 +27,12 @@ export const Route = createFileRoute("/_layout/")({
 })
 
 function WorkshopCard({ workshop }: { workshop: Workshop }) {
-  const statusColors = {
+  const statusColors: Record<string, string> = {
     active: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300",
     completed: "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300",
     draft: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-300",
+    failed: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300",
+    deleted: "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300",
   }
 
   return (
@@ -40,8 +42,11 @@ function WorkshopCard({ workshop }: { workshop: Workshop }) {
           <div className="flex items-center justify-between">
             <CardTitle className="text-lg">{workshop.name}</CardTitle>
             <span
-              className={`px-2 py-1 rounded-full text-xs font-medium ${statusColors[workshop.status]}`}
+              className={`px-2 py-1 rounded-full text-xs font-medium ${statusColors[workshop.status] || statusColors.draft}`}
             >
+              {workshop.status === "failed" && (
+                <AlertCircle className="inline h-3 w-3 mr-1" />
+              )}
               {workshop.status}
             </span>
           </div>
