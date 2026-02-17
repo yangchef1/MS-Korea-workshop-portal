@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:swa": "swa start http://localhost:5173 --api-devserver-url http://localhost:8000",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview"
@@ -45,6 +46,7 @@
     "tailwindcss-animate": "^1.0.7"
   },
   "devDependencies": {
+    "@azure/static-web-apps-cli": "^2.0.0",
     "@eslint/js": "^9.13.0",
     "@tailwindcss/vite": "^4.0.0",
     "@types/node": "^22.9.0",
