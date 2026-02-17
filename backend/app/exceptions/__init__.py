@@ -22,6 +22,7 @@ Exception Hierarchy:
     │   ├── MissingFieldError
     │   ├── InvalidFormatError
     │   ├── InvalidDateRangeError
+    │   ├── InvalidSubscriptionError
     │   ├── FileTooLargeError
     │   └── UnsupportedFileTypeError
     ├── ServiceError (502)
@@ -92,6 +93,7 @@ from .validation import (
     InvalidDateRangeError,
     FileTooLargeError,
     UnsupportedFileTypeError,
+    InvalidSubscriptionError,
 )
 
 __all__ = [
@@ -131,4 +133,5 @@ __all__ = [
     "InvalidDateRangeError",
     "FileTooLargeError",
     "UnsupportedFileTypeError",
+    "InvalidSubscriptionError",
 ]

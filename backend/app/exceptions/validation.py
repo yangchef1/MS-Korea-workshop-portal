@@ -61,3 +61,13 @@ class UnsupportedFileTypeError(ValidationError):
         self.code = "UNSUPPORTED_FILE_TYPE"
         if allowed_types:
             self.details["allowed_types"] = allowed_types
+
+
+class InvalidSubscriptionError(ValidationError):
+    """Subscription ID is not in the allowed list."""
+
+    def __init__(self, message: str = "Invalid subscription ID", subscription_id: str = None):
+        super().__init__(message, "subscription_id")
+        self.code = "INVALID_SUBSCRIPTION"
+        if subscription_id:
+            self.details["subscription_id"] = subscription_id

@@ -101,7 +101,7 @@ class ParticipantData(BaseModel):
     email: str
     upn: str
     password: str
-    subscription_id: str
+    subscription_id: str = ""  # Default empty for backward compatibility; service layer falls back to default sub
     resource_group: str
     object_id: str
 
