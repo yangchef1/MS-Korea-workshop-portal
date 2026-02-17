@@ -21,9 +21,13 @@ import {
   Send,
   Check,
   Link as LinkIcon,
+  AlertTriangle,
+  RotateCw,
+  UserX,
+  FolderX,
 } from "lucide-react"
 
-import { workshopApi, type Participant, type AzureResource, type CostBreakdown } from "@/client"
+import { workshopApi, type Participant, type AzureResource, type CostBreakdown, type DeletionFailure } from "@/client"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -398,6 +402,179 @@ function SurveyTab({ workshopId, surveyUrl }: { workshopId: string; surveyUrl?: 
   )
 }
 
+function DeletionFailureRow({
+  failure,
+  workshopId,
+}: {
+  failure: DeletionFailure
+  workshopId: string
+}) {
+  const { showSuccessToast, showErrorToast } = useCustomToast()
+  const queryClient = useQueryClient()
+
+  const retryMutation = useMutation({
+    mutationFn: () => workshopApi.retryDeletion(workshopId, failure.id),
+    onSuccess: (data) => {
+      showSuccessToast(data.detail || "삭제에 성공했습니다")
+      queryClient.invalidateQueries({
+        queryKey: ["deletion-failures", workshopId],
+      })
+      queryClient.invalidateQueries({ queryKey: ["workshop", workshopId] })
+    },
+    onError: () => {
+      showErrorToast("재시도에 실패했습니다")
+      queryClient.invalidateQueries({
+        queryKey: ["deletion-failures", workshopId],
+      })
+    },
+  })
+
+  const isResourceGroup = failure.resource_type === "resource_group"
+  const TypeIcon = isResourceGroup ? FolderX : UserX
+
+  return (
+    <div className="flex items-center justify-between p-4 border rounded-lg">
+      <div className="flex items-center gap-3">
+        <div className="p-2 rounded-md bg-red-100 dark:bg-red-900/30">
+          <TypeIcon className="h-4 w-4 text-red-600 dark:text-red-400" />
+        </div>
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-2">
+            <span className="font-medium">{failure.resource_name}</span>
+            <span className="px-1.5 py-0.5 rounded text-xs bg-muted text-muted-foreground">
+              {isResourceGroup ? "리소스 그룹" : "사용자"}
+            </span>
+          </div>
+          <div className="text-sm text-red-600 dark:text-red-400 flex items-center gap-1">
+            <AlertCircle className="h-3 w-3 flex-shrink-0" />
+            <span className="line-clamp-1">{failure.error_message}</span>
+          </div>
+          <div className="text-xs text-muted-foreground flex items-center gap-3">
+            <span>
+              {new Date(failure.failed_at).toLocaleString("ko-KR", {
+                month: "short",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
+            </span>
+            {failure.retry_count > 0 && (
+              <span>재시도 {failure.retry_count}회</span>
+            )}
+            {failure.subscription_id && (
+              <span className="truncate max-w-[200px]">
+                구독: {failure.subscription_id}
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => retryMutation.mutate()}
+        disabled={retryMutation.isPending}
+        className="shrink-0"
+      >
+        {retryMutation.isPending ? (
+          <RefreshCw className="h-4 w-4 animate-spin mr-1" />
+        ) : (
+          <RotateCw className="h-4 w-4 mr-1" />
+        )}
+        수동 삭제
+      </Button>
+    </div>
+  )
+}
+
+function DeletionFailuresTab({ workshopId }: { workshopId: string }) {
+  const { showSuccessToast, showErrorToast } = useCustomToast()
+  const queryClient = useQueryClient()
+
+  const { data, isLoading } = useQuery({
+    queryKey: ["deletion-failures", workshopId],
+    queryFn: () => workshopApi.getDeletionFailures(workshopId),
+  })
+
+  const retryAllMutation = useMutation({
+    mutationFn: () => workshopApi.retryAllDeletions(workshopId),
+    onSuccess: (data) => {
+      showSuccessToast(data.detail || "전체 재시도 완료")
+      queryClient.invalidateQueries({
+        queryKey: ["deletion-failures", workshopId],
+      })
+      queryClient.invalidateQueries({ queryKey: ["workshop", workshopId] })
+    },
+    onError: () => {
+      showErrorToast("전체 재시도에 실패했습니다")
+    },
+  })
+
+  if (isLoading) {
+    return (
+      <div className="text-center py-8">
+        <RefreshCw className="h-6 w-6 animate-spin mx-auto text-muted-foreground" />
+        <p className="text-muted-foreground mt-2">삭제 실패 항목 조회 중...</p>
+      </div>
+    )
+  }
+
+  const items = data?.items || []
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-red-500" />
+              삭제 실패 항목
+            </CardTitle>
+            <CardDescription>
+              자동 삭제에 실패한 리소스 및 계정 목록입니다. 수동으로 삭제를
+              재시도할 수 있습니다.
+            </CardDescription>
+          </div>
+          {items.length > 0 && (
+            <Button
+              onClick={() => retryAllMutation.mutate()}
+              disabled={retryAllMutation.isPending}
+              size="sm"
+            >
+              {retryAllMutation.isPending ? (
+                <RefreshCw className="h-4 w-4 animate-spin mr-1" />
+              ) : (
+                <RotateCw className="h-4 w-4 mr-1" />
+              )}
+              전체 재시도
+            </Button>
+          )}
+        </div>
+      </CardHeader>
+      <CardContent>
+        {items.length > 0 ? (
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              총 {data?.total_count || 0}개의 실패 항목
+            </p>
+            {items.map((failure) => (
+              <DeletionFailureRow
+                key={failure.id}
+                failure={failure}
+                workshopId={workshopId}
+              />
+            ))}
+          </div>
+        ) : (
+          <p className="text-muted-foreground text-center py-8">
+            삭제 실패 항목이 없습니다
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
 function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
   const { data: workshop } = useSuspenseQuery(getWorkshopQueryOptions(workshopId))
   
@@ -412,10 +589,12 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
     queryFn: () => workshopApi.getCost(workshopId),
   })
 
-  const statusColors = {
+  const statusColors: Record<string, string> = {
     active: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300",
     completed: "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300",
     draft: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-300",
+    failed: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300",
+    deleted: "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300",
   }
 
   return (
@@ -516,6 +695,12 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
           <TabsTrigger value="resources">리소스</TabsTrigger>
           <TabsTrigger value="costs">비용</TabsTrigger>
           <TabsTrigger value="survey">설문</TabsTrigger>
+          {workshop.status === "failed" && (
+            <TabsTrigger value="deletion-failures" className="text-red-600 dark:text-red-400">
+              <AlertTriangle className="h-4 w-4 mr-1" />
+              삭제 실패 항목
+            </TabsTrigger>
+          )}
         </TabsList>
 
         <TabsContent value="participants" className="mt-4">
@@ -573,6 +758,12 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
         <TabsContent value="survey" className="mt-4">
           <SurveyTab workshopId={workshop.id} surveyUrl={workshop.survey_url} />
         </TabsContent>
+
+        {workshop.status === "failed" && (
+          <TabsContent value="deletion-failures" className="mt-4">
+            <DeletionFailuresTab workshopId={workshop.id} />
+          </TabsContent>
+        )}
       </Tabs>
     </div>
   )
