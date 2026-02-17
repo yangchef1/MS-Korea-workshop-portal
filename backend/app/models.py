@@ -212,3 +212,57 @@ class ErrorResponse(BaseModel):
 
     error: str
     detail: Optional[str] = None
+
+
+# ------------------------------------------------------------------
+# Deletion failure tracking
+# ------------------------------------------------------------------
+
+DELETION_FAILURE_RESOURCE_TYPES = {"resource_group", "user"}
+DELETION_FAILURE_STATUSES = {"pending", "resolved"}
+
+
+class DeletionFailureItem(BaseModel):
+    """삭제 실패 항목."""
+
+    id: str = Field(..., min_length=1)
+    workshop_id: str = Field(..., min_length=1)
+    workshop_name: str = ""
+    resource_type: str = Field(
+        ..., description="resource_group 또는 user"
+    )
+    resource_name: str = Field(..., min_length=1)
+    subscription_id: Optional[str] = None
+    error_message: str = ""
+    failed_at: str = Field(..., min_length=1)
+    status: str = "pending"
+    retry_count: int = 0
+
+    @field_validator("resource_type")
+    @classmethod
+    def validate_resource_type(cls, value: str) -> str:
+        """resource_type 값이 허용된 유형인지 검증한다."""
+        if value not in DELETION_FAILURE_RESOURCE_TYPES:
+            raise ValueError(
+                f"Invalid resource_type '{value}'. "
+                f"Must be one of: {DELETION_FAILURE_RESOURCE_TYPES}"
+            )
+        return value
+
+    @field_validator("status")
+    @classmethod
+    def validate_failure_status(cls, value: str) -> str:
+        """status 값이 허용된 상태인지 검증한다."""
+        if value not in DELETION_FAILURE_STATUSES:
+            raise ValueError(
+                f"Invalid status '{value}'. "
+                f"Must be one of: {DELETION_FAILURE_STATUSES}"
+            )
+        return value
+
+
+class DeletionFailureListResponse(BaseModel):
+    """삭제 실패 목록 응답."""
+
+    items: list[DeletionFailureItem] = []
+    total_count: int = 0
