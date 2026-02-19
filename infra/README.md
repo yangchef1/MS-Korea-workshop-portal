@@ -11,11 +11,10 @@ infra/
 │   ├── dev.bicepparam            # 개발 환경 파라미터
 │   └── prod.bicepparam           # 운영 환경 파라미터
 └── modules/
-    ├── container-apps.bicep      # Container Apps Environment + Backend
-    ├── static-web-app.bicep      # SWA + Linked Backend
+    ├── container-apps.bicep      # Container Apps Environment + Backend (GHCR)
+    ├── static-web-app.bicep      # Static Web App (Free tier)
     ├── storage-account.bicep     # Table Storage (4개 테이블)
     ├── communication.bicep       # Azure Communication Services
-    ├── container-registry.bicep  # ACR
     └── function-app.bicep        # Function App (워크샵 클린업)
 ```
 
@@ -32,8 +31,14 @@ wsl az deployment sub create --what-if \
   --location koreacentral \
   --template-file infra/main.bicep \
   --parameters infra/parameters/dev.bicepparam \
-  spClientSecret=dummy acsConnectionString=dummy
+  spClientSecret=dummy acsConnectionString=dummy ghcrToken=dummy
 ```
+
+### GHCR 사전 준비
+
+1. **PAT 생성**: GitHub Settings → Developer settings → Personal access tokens → `read:packages` 권한
+2. **GitHub Actions Secret 등록**: Repository Settings → Secrets → `GHCR_TOKEN`에 PAT 등록
+3. **패키지 가시성**: GHCR 패키지가 private인 경우 PAT에 `read:packages` 권한 필수
 
 ### 배포 실행
 
@@ -43,7 +48,8 @@ wsl az deployment sub create \
   --template-file infra/main.bicep \
   --parameters infra/parameters/prod.bicepparam \
   spClientSecret='$SP_CLIENT_SECRET' \
-  acsConnectionString='$ACS_CONNECTION_STRING'
+  acsConnectionString='$ACS_CONNECTION_STRING' \
+  ghcrToken='$GHCR_TOKEN'
 ```
 
 ## 신규 Subscription 추가 체크리스트
@@ -70,7 +76,7 @@ wsl az deployment sub create \
    wsl az deployment sub create --location koreacentral \
      --template-file infra/main.bicep \
      --parameters infra/parameters/prod.bicepparam \
-     spClientSecret='...' acsConnectionString='...'
+     spClientSecret='...' acsConnectionString='...' ghcrToken='...'
    ```
 
 5. **CSV에서 사용**: 참가자 CSV에 새 `subscription_id` 사용 가능
