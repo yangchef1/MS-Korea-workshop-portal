@@ -56,9 +56,16 @@ jobs:
             --location ${{ env.AZURE_LOCATION }} \
             --template-file infra/main.bicep \
             --parameters infra/parameters/${ENV_NAME}.bicepparam \
+            subscriptionIds='["${{ secrets.AZURE_SUBSCRIPTION_ID }}"]' \
+            tenantId='${{ secrets.AZURE_TENANT_ID }}' \
+            spClientId='${{ secrets.SP_CLIENT_ID }}' \
+            spDomain='${{ secrets.SP_DOMAIN }}' \
             spClientSecret='${{ secrets.SP_CLIENT_SECRET }}' \
+            ghcrImage='${{ env.GHCR_IMAGE }}' \
+            ghcrToken='${{ secrets.GHCR_TOKEN }}' \
             acsConnectionString='${{ secrets.ACS_CONNECTION_STRING }}' \
-            ghcrToken='${{ secrets.GHCR_TOKEN }}'
+            azureTenantId='${{ vars.VITE_AZURE_TENANT_ID }}' \
+            azureClientId='${{ vars.VITE_AZURE_CLIENT_ID }}'
 
   # ---------------------------------------------------------------------------
   # Job: Backend (Docker → GHCR → Container Apps)
