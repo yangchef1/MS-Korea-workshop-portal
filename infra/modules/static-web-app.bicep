@@ -1,5 +1,5 @@
 // =============================================================================
-// Azure Static Web App + Linked Backend
+// Azure Static Web App
 // =============================================================================
 
 @description('Environment name for naming.')
@@ -7,9 +7,6 @@ param environmentName string
 
 @description('Azure region.')
 param location string
-
-@description('Backend Container App FQDN (without scheme).')
-param backendFqdn string
 
 var swaName = 'swa-workshop-${environmentName}'
 
@@ -31,18 +28,6 @@ resource swa 'Microsoft.Web/staticSites@2023-12-01' = {
   tags: {
     project: 'workshop-portal'
     environment: environmentName
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Linked Backend — routes /api/* to the Container App
-// ---------------------------------------------------------------------------
-resource linkedBackend 'Microsoft.Web/staticSites/linkedBackends@2023-12-01' = {
-  parent: swa
-  name: 'backend'
-  properties: {
-    backendResourceId: '' // Linked via FQDN below
-    region: location
   }
 }
 

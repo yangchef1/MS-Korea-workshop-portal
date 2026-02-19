@@ -9,11 +9,12 @@ param environmentName string
 @description('Azure region.')
 param location string
 
-@description('ACR login server URL (e.g., myacr.azurecr.io).')
-param acrLoginServer string
+@description('GHCR container image reference (e.g., ghcr.io/<owner>/workshop-backend).')
+param ghcrImage string
 
-@description('ACR name for role assignment.')
-param acrName string
+@secure()
+@description('GHCR Personal Access Token for pulling container images.')
+param ghcrToken string
 
 @description('Subscription IDs for workshop resource provisioning.')
 param subscriptionIds array
@@ -114,11 +115,19 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
         targetPort: 8000
         transport: 'http'
         allowInsecure: false
+        corsPolicy: {
+          allowedOrigins: ['*'] // Restrict to SWA hostname after initial deployment
+          allowedMethods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS']
+          allowedHeaders: ['*']
+          allowCredentials: true
+          maxAge: 86400
+        }
       }
       registries: [
         {
-          server: acrLoginServer
-          identity: 'system'
+          server: 'ghcr.io'
+          username: 'ghcr-pull'
+          passwordSecretRef: 'ghcr-token'
         }
       ]
       secrets: [
@@ -130,13 +139,17 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
           name: 'acs-conn-str'
           value: acsConnectionString
         }
+        {
+          name: 'ghcr-token'
+          value: ghcrToken
+        }
       ]
     }
     template: {
       containers: [
         {
           name: 'backend'
-          image: '${acrLoginServer}/workshop-backend:${imageTag}'
+          image: '${ghcrImage}:${imageTag}'
           resources: {
             cpu: json('0.5')
             memory: '1Gi'
@@ -186,26 +199,6 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
   tags: {
     project: 'workshop-portal'
     environment: environmentName
-  }
-}
-
-// ---------------------------------------------------------------------------
-// ACR Pull role assignment for Container App Managed Identity
-// ---------------------------------------------------------------------------
-// AcrPull built-in role ID
-var acrPullRoleId = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
-
-resource acrResource 'Microsoft.ContainerRegistry/registries@2023-11-01-preview' existing = {
-  name: acrName
-}
-
-resource acrPullRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(acrResource.id, containerApp.id, acrPullRoleId)
-  scope: acrResource
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', acrPullRoleId)
-    principalId: containerApp.identity.principalId
-    principalType: 'ServicePrincipal'
   }
 }
 

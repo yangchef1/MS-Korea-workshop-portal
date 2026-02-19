@@ -7,7 +7,7 @@
 //     --location koreacentral \
 //     --template-file infra/main.bicep \
 //     --parameters infra/parameters/dev.bicepparam \
-//     spClientSecret=<secret> acsConnectionString=<secret>
+//     spClientSecret=<secret> acsConnectionString=<secret> ghcrToken=<secret>
 
 targetScope = 'subscription'
 
@@ -44,8 +44,12 @@ param acsConnectionString string
 @description('Storage Account name. Must match existing account in prod to preserve data.')
 param storageAccountName string
 
-@description('Azure Container Registry name.')
-param acrName string
+@description('GHCR container image reference (e.g., ghcr.io/<owner>/workshop-backend).')
+param ghcrImage string
+
+@secure()
+@description('GHCR Personal Access Token for pulling container images. Injected from CI/CD secrets.')
+param ghcrToken string
 
 @description('Email sender address for Azure Communication Services.')
 param emailSender string = ''
@@ -88,17 +92,7 @@ module storage 'modules/storage-account.bicep' = {
   }
 }
 
-// 2. Container Registry
-module acr 'modules/container-registry.bicep' = {
-  name: 'acr-${environmentName}'
-  scope: portalRg
-  params: {
-    acrName: acrName
-    location: location
-  }
-}
-
-// 3. Communication Services
+// 2. Communication Services
 module communication 'modules/communication.bicep' = {
   name: 'acs-${environmentName}'
   scope: portalRg
@@ -108,15 +102,15 @@ module communication 'modules/communication.bicep' = {
   }
 }
 
-// 4. Container Apps (Backend)
+// 3. Container Apps (Backend)
 module containerApps 'modules/container-apps.bicep' = {
   name: 'ca-${environmentName}'
   scope: portalRg
   params: {
     environmentName: environmentName
     location: location
-    acrLoginServer: acr.outputs.loginServer
-    acrName: acrName
+    ghcrImage: ghcrImage
+    ghcrToken: ghcrToken
     subscriptionIds: subscriptionIds
     tenantId: tenantId
     spClientId: spClientId
@@ -130,18 +124,17 @@ module containerApps 'modules/container-apps.bicep' = {
   }
 }
 
-// 5. Static Web App + Linked Backend
+// 4. Static Web App
 module swa 'modules/static-web-app.bicep' = {
   name: 'swa-${environmentName}'
   scope: portalRg
   params: {
     environmentName: environmentName
     location: location
-    backendFqdn: containerApps.outputs.fqdn
   }
 }
 
-// 6. Function App (Workshop Cleanup)
+// 5. Function App (Workshop Cleanup)
 module functionApp 'modules/function-app.bicep' = {
   name: 'func-${environmentName}'
   scope: portalRg
@@ -161,8 +154,8 @@ module functionApp 'modules/function-app.bicep' = {
 // Outputs
 // ---------------------------------------------------------------------------
 output storageAccountNameOutput string = storage.outputs.storageAccountName
-output acrLoginServer string = acr.outputs.loginServer
 output containerAppFqdn string = containerApps.outputs.fqdn
+output backendUrl string = 'https://${containerApps.outputs.fqdn}'
 output swaDefaultHostname string = swa.outputs.defaultHostname
 output swaDeploymentToken string = swa.outputs.deploymentToken
 output functionAppName string = functionApp.outputs.functionAppName
