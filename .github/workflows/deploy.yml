@@ -19,10 +19,11 @@ on:
 permissions:
   id-token: write # OIDC
   contents: read
+  packages: write # GHCR
 
 env:
   AZURE_LOCATION: koreacentral
-  ACR_NAME: ${{ vars.ACR_NAME }}
+  GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/workshop-backend
   CONTAINER_APP_NAME: ${{ vars.CONTAINER_APP_NAME }}
   RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
   SWA_NAME: ${{ vars.SWA_NAME }}
@@ -56,10 +57,11 @@ jobs:
             --template-file infra/main.bicep \
             --parameters infra/parameters/${ENV_NAME}.bicepparam \
             spClientSecret='${{ secrets.SP_CLIENT_SECRET }}' \
-            acsConnectionString='${{ secrets.ACS_CONNECTION_STRING }}'
+            acsConnectionString='${{ secrets.ACS_CONNECTION_STRING }}' \
+            ghcrToken='${{ secrets.GHCR_TOKEN }}'
 
   # ---------------------------------------------------------------------------
-  # Job: Backend (Docker → ACR → Container Apps)
+  # Job: Backend (Docker → GHCR → Container Apps)
   # ---------------------------------------------------------------------------
   backend:
     name: Deploy Backend
@@ -77,10 +79,12 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Build & Push to ACR
+      - name: Login to GHCR
+        run: echo '${{ secrets.GITHUB_TOKEN }}' | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Build & Push to GHCR
         run: |
-          az acr login --name ${{ env.ACR_NAME }}
-          IMAGE=${{ env.ACR_NAME }}.azurecr.io/workshop-backend:${{ github.sha }}
+          IMAGE=${{ env.GHCR_IMAGE }}:${{ github.sha }}
           docker build -t $IMAGE -f Dockerfile .
           docker push $IMAGE
 
@@ -89,7 +93,7 @@ jobs:
           az containerapp update \
             --name ${{ env.CONTAINER_APP_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP }} \
-            --image ${{ env.ACR_NAME }}.azurecr.io/workshop-backend:${{ github.sha }}
+            --image ${{ env.GHCR_IMAGE }}:${{ github.sha }}
 
   # ---------------------------------------------------------------------------
   # Job: Frontend (Build → SWA Deploy)

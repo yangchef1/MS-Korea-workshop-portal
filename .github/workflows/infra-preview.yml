@@ -38,6 +38,7 @@ jobs:
             --parameters infra/parameters/dev.bicepparam \
             spClientSecret='dummy' \
             acsConnectionString='dummy' \
+            ghcrToken='dummy' \
             2>&1) || true
           # Escape for GitHub Actions multiline output
           echo "result<<EOF" >> $GITHUB_OUTPUT
