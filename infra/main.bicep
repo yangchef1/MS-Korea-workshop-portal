@@ -122,12 +122,13 @@ module containerApps 'modules/container-apps.bicep' = {
 }
 
 // 4. Static Web App
+// SWA Free tier is not available in koreacentral; eastasia is the closest supported region.
 module swa 'modules/static-web-app.bicep' = {
   name: 'swa-${environmentName}'
   scope: portalRg
   params: {
     environmentName: environmentName
-    location: location
+    location: 'eastasia'
   }
 }
 

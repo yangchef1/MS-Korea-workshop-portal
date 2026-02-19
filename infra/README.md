@@ -85,9 +85,8 @@ wsl az deployment sub create \
 
 | 변수 | Container Apps | Function App | 비고 |
 |------|---------------|-------------|------|
-| `AZURE_SP_SUBSCRIPTION_ID` | ✅ | — | 기본 Subscription (하위 호환) |
+| `AZURE_SUBSCRIPTION_ID` | ✅ | ✅ | 기본 Subscription |
 | `ALLOWED_SUBSCRIPTION_IDS` | ✅ | ✅ | 콤마 구분, Bicep `join()` |
-| `AZURE_SUBSCRIPTION_ID` | — | deprecated | FA 하위 호환 폴백 |
 | `ALLOWED_ORIGINS` | ✅ | — | CORS용 |
 
 ## Storage Account 멱등성
