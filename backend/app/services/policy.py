@@ -66,7 +66,7 @@ class PolicyService:
         """
         try:
             self._credential = self._create_credential()
-            self._default_subscription_id = settings.azure_sp_subscription_id
+            self._default_subscription_id = settings.azure_subscription_id
             logger.info("PolicyService initialized successfully")
         except ClientAuthenticationError as e:
             logger.error("Authentication failed during PolicyService initialization")

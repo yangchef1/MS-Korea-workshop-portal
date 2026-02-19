@@ -104,7 +104,7 @@ class CostService:
         """Cost Management 클라이언트를 초기화한다."""
         try:
             self._credential = get_azure_credential()
-            self._default_subscription_id = settings.azure_sp_subscription_id
+            self._default_subscription_id = settings.azure_subscription_id
             logger.info("Initialized Cost Management service")
         except Exception as e:
             logger.error("Failed to initialize Cost Management client: %s", e)

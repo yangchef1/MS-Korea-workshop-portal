@@ -42,7 +42,7 @@ async def lifespan(app: FastAPI):
         "Starting %s v%s (subscription: %s)",
         settings.app_name,
         settings.app_version,
-        settings.azure_sp_subscription_id,
+        settings.azure_subscription_id,
     )
 
     yield
