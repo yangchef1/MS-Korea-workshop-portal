@@ -49,7 +49,7 @@ class ResourceManagerService:
         """Azure Resource Manager 서비스를 초기화한다."""
         try:
             self._credential = self._create_credential()
-            self._default_subscription_id = settings.azure_sp_subscription_id
+            self._default_subscription_id = settings.azure_subscription_id
             logger.info("Initialized async Resource Manager service")
         except Exception as e:
             logger.error("Failed to initialize Resource Manager client: %s", e)

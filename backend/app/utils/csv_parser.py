@@ -197,7 +197,7 @@ def _extract_subscription_id(
         InvalidSubscriptionError: If the subscription is not in the allowed list.
     """
     if not has_two_columns or len(columns) < 2 or not columns[1]:
-        return settings.azure_sp_subscription_id
+        return settings.azure_subscription_id
 
     sub_id = columns[1]
 

@@ -335,7 +335,7 @@ async def create_workshop(
         for user in user_results:
             user["email"] = alias_to_email.get(user["alias"], "")
             user["subscription_id"] = alias_to_sub.get(
-                user["alias"], settings.azure_sp_subscription_id
+                user["alias"], settings.azure_subscription_id
             )
 
         # Step 2: 리소스 그룹 생성

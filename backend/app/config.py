@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     azure_sp_client_id: str = os.getenv("AZURE_SP_CLIENT_ID", "")
     azure_sp_client_secret: str = os.getenv("AZURE_SP_CLIENT_SECRET", "")
     azure_sp_domain: str = os.getenv("AZURE_SP_DOMAIN", "yourdomain.com")
-    azure_sp_subscription_id: str = os.getenv("AZURE_SP_SUBSCRIPTION_ID", "")
+    azure_subscription_id: str = os.getenv("AZURE_SUBSCRIPTION_ID", "")
 
     # Multi-subscription support: comma-separated list of allowed subscription IDs
     allowed_subscription_ids_raw: str = os.getenv("ALLOWED_SUBSCRIPTION_IDS", "")
@@ -148,7 +148,7 @@ class Settings(BaseSettings):
             for s in self.allowed_subscription_ids_raw.split(",")
             if s.strip()
         ]
-        return parsed if parsed else ([self.azure_sp_subscription_id] if self.azure_sp_subscription_id else [])
+        return parsed if parsed else ([self.azure_subscription_id] if self.azure_subscription_id else [])
 
     def is_valid_subscription(self, subscription_id: str) -> bool:
         """Check whether a subscription ID is in the allowed list."""
