@@ -155,7 +155,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             memory: '1Gi'
           }
           env: [
-            { name: 'AZURE_SP_SUBSCRIPTION_ID', value: subscriptionIds[0] }
+            { name: 'AZURE_SUBSCRIPTION_ID', value: subscriptionIds[0] }
             { name: 'ALLOWED_SUBSCRIPTION_IDS', value: allowedSubsJoined }
             { name: 'AZURE_SP_TENANT_ID', value: tenantId }
             { name: 'AZURE_SP_CLIENT_ID', value: spClientId }
