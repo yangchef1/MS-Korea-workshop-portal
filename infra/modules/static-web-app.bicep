@@ -36,4 +36,6 @@ resource swa 'Microsoft.Web/staticSites@2023-12-01' = {
 // ---------------------------------------------------------------------------
 output defaultHostname string = swa.properties.defaultHostname
 output swaName string = swa.name
+
+#disable-next-line outputs-should-not-contain-secrets
 output deploymentToken string = swa.listSecrets().properties.apiKey

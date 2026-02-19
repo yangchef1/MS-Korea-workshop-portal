@@ -60,9 +60,6 @@ param azureTenantId string = tenantId
 @description('MSAL client ID for JWT validation.')
 param azureClientId string = ''
 
-@description('Custom domain for SWA (optional).')
-param customDomain string = ''
-
 @description('Resource group name for portal infrastructure.')
 param resourceGroupName string = 'rg-workshop-portal-${environmentName}'
 
