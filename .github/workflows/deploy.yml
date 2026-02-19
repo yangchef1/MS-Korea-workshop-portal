@@ -50,22 +50,23 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Deploy Bicep
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          AZURE_SP_TENANT_ID: ${{ secrets.AZURE_SP_TENANT_ID }}
+          AZURE_SP_CLIENT_ID: ${{ secrets.AZURE_SP_CLIENT_ID }}
+          AZURE_SP_CLIENT_SECRET: ${{ secrets.AZURE_SP_CLIENT_SECRET }}
+          AZURE_SP_DOMAIN: ${{ secrets.AZURE_SP_DOMAIN }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ vars.VITE_AZURE_CLIENT_ID }}
+          GHCR_IMAGE: ${{ env.GHCR_IMAGE }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          ACS_CONNECTION_STRING: ${{ secrets.ACS_CONNECTION_STRING }}
         run: |
           ENV_NAME=${{ github.ref == 'refs/heads/main' && 'prod' || 'dev' }}
           az deployment sub create \
             --location ${{ env.AZURE_LOCATION }} \
             --template-file infra/main.bicep \
-            --parameters infra/parameters/${ENV_NAME}.bicepparam \
-            subscriptionIds='["${{ secrets.AZURE_SUBSCRIPTION_ID }}"]' \
-            tenantId='${{ secrets.AZURE_TENANT_ID }}' \
-            spClientId='${{ secrets.SP_CLIENT_ID }}' \
-            spDomain='${{ secrets.SP_DOMAIN }}' \
-            spClientSecret='${{ secrets.SP_CLIENT_SECRET }}' \
-            ghcrImage='${{ env.GHCR_IMAGE }}' \
-            ghcrToken='${{ secrets.GHCR_TOKEN }}' \
-            acsConnectionString='${{ secrets.ACS_CONNECTION_STRING }}' \
-            azureTenantId='${{ vars.VITE_AZURE_TENANT_ID }}' \
-            azureClientId='${{ vars.VITE_AZURE_CLIENT_ID }}'
+            --parameters infra/parameters/${ENV_NAME}.bicepparam
 
   # ---------------------------------------------------------------------------
   # Job: Backend (Docker → GHCR → Container Apps)
