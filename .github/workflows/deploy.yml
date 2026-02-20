@@ -23,10 +23,11 @@ permissions:
 
 env:
   AZURE_LOCATION: koreacentral
+  ENV_NAME: ${{ github.ref == 'refs/heads/main' && 'prod' || 'dev' }}
   GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/workshop-backend
-  CONTAINER_APP_NAME: ${{ vars.CONTAINER_APP_NAME }}
-  RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
-  SWA_NAME: ${{ vars.SWA_NAME }}
+  CONTAINER_APP_NAME: ca-workshop-backend-${{ github.ref == 'refs/heads/main' && 'prod' || 'dev' }}
+  RESOURCE_GROUP: rg-workshop-portal-${{ github.ref == 'refs/heads/main' && 'prod' || 'dev' }}
+  SWA_NAME: swa-workshop-${{ github.ref == 'refs/heads/main' && 'prod' || 'dev' }}
 
 # ---------------------------------------------------------------------------
 # Job: Infrastructure (Bicep)
