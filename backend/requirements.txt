@@ -18,7 +18,7 @@ azure-data-tables==12.5.0
 msgraph-sdk==1.2.0
 
 # Pydantic for settings and validation
-pydantic>=2.5.3
+pydantic[email]>=2.5.3
 pydantic-settings>=2.1.0
 
 # Utilities
