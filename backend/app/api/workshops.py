@@ -30,6 +30,7 @@ from app.models import (
     MessageResponse,
     PolicyData,
     SurveyUrlUpdate,
+    WorkshopCreateInput,
     WorkshopDetail,
     WorkshopResponse,
 )
@@ -309,14 +310,26 @@ async def create_workshop(
     CSV 형식: 이메일만 포함하는 단일 컬럼 또는 이메일+subscription_id 2컬럼.
     Azure 리소스 생성 후 DB 저장이 실패하면 보상 트랜잭션(rollback)을 수행한다.
     """
+    # Step 0: 입력값 사전 검증 (Azure 리소스 생성 전에 빠르게 실패)
+    regions = [r.strip() for r in allowed_regions.split(",")]
+    services = [s.strip() for s in allowed_services.split(",")]
+    try:
+        WorkshopCreateInput(
+            name=name,
+            start_date=start_date,
+            end_date=end_date,
+            allowed_regions=regions,
+            allowed_services=services,
+        )
+    except Exception as e:
+        raise InvalidInputError(f"Invalid workshop input: {e}") from e
+
     created_users: list[dict] = []
     created_rg_specs: list[dict] = []
 
     try:
         workshop_id = str(uuid.uuid4())
         participants = await parse_participants_csv(participants_file)
-        regions = [r.strip() for r in allowed_regions.split(",")]
-        services = [s.strip() for s in allowed_services.split(",")]
 
         logger.info(
             "Creating workshop '%s' with %d participants",
