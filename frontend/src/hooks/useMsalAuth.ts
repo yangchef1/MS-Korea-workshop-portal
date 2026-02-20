@@ -114,7 +114,7 @@ export function useMsalAuth() {
       // If silent acquisition fails, try interactive
       console.warn("Silent token acquisition failed, trying interactive:", error)
       try {
-        const response = await instance.acquireTokenRedirect(loginRequest)
+        const response = await instance.acquireTokenPopup(loginRequest)
         return response?.accessToken || null
       } catch (interactiveError) {
         console.error("Interactive token acquisition failed:", interactiveError)
