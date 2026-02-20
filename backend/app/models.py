@@ -116,17 +116,33 @@ class PolicyData(BaseModel):
 WORKSHOP_VALID_STATUSES = {"active", "completed", "deleted", "failed"}
 
 
+class WorkshopCreateInput(BaseModel):
+    """워크샵 생성 요청의 입력값을 사전 검증한다.
+
+    Azure 리소스 생성 전에 빠르게 실패하기 위한 경량 검증 모델.
+    WorkshopMetadata와 동일한 제약 조건을 공유한다.
+    """
+
+    name: str = Field(..., min_length=3, max_length=100)
+    start_date: str = Field(..., min_length=1)
+    end_date: str = Field(..., min_length=1)
+    allowed_regions: list[str] = Field(..., min_length=1)
+    allowed_services: list[str] = Field(..., min_length=1)
+
+
 class WorkshopMetadata(BaseModel):
     """Table Storage에 저장되는 워크샵 메타데이터.
 
     Table Storage에는 스키마 검증이 없으므로, 저장 전에 이 모델로
     앱 레벨 검증을 수행한다.
+    입력값(name, dates, regions, services)은 WorkshopCreateInput에서
+    사전 검증되므로, 여기서는 중복 제약을 두지 않는다.
     """
 
     id: str = Field(..., min_length=1)
-    name: str = Field(..., min_length=3, max_length=100)
-    start_date: str = Field(..., min_length=1)
-    end_date: str = Field(..., min_length=1)
+    name: str
+    start_date: str
+    end_date: str
     participants: list[ParticipantData] = []
     base_resources_template: str
     policy: PolicyData
