@@ -99,7 +99,18 @@ module communication 'modules/communication.bicep' = {
   }
 }
 
-// 3. Container Apps (Backend)
+// 3. Static Web App
+// SWA Free tier is not available in koreacentral; eastasia is the closest supported region.
+module swa 'modules/static-web-app.bicep' = {
+  name: 'swa-${environmentName}'
+  scope: portalRg
+  params: {
+    environmentName: environmentName
+    location: 'eastasia'
+  }
+}
+
+// 4. Container Apps (Backend)
 module containerApps 'modules/container-apps.bicep' = {
   name: 'ca-${environmentName}'
   scope: portalRg
@@ -118,17 +129,7 @@ module containerApps 'modules/container-apps.bicep' = {
     emailSender: emailSender
     azureTenantId: azureTenantId
     azureClientId: azureClientId
-  }
-}
-
-// 4. Static Web App
-// SWA Free tier is not available in koreacentral; eastasia is the closest supported region.
-module swa 'modules/static-web-app.bicep' = {
-  name: 'swa-${environmentName}'
-  scope: portalRg
-  params: {
-    environmentName: environmentName
-    location: 'eastasia'
+    allowedOrigins: 'https://${swa.outputs.defaultHostname}'
   }
 }
 

@@ -2,8 +2,8 @@ import axios, { type AxiosError, type InternalAxiosRequestConfig } from "axios"
 import { msalInstance, loginRequest } from "@/lib/msalConfig"
 import { InteractionRequiredAuthError, BrowserAuthError } from "@azure/msal-browser"
 
-// API base URL - proxied through Vite in development
-const API_BASE_URL = "/api"
+// API base URL - proxied through Vite in dev, full URL in production
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api"
 
 // Constants for auth failure tracking (persisted in localStorage)
 const AUTH_FAILURE_KEY = "auth_failure_count"

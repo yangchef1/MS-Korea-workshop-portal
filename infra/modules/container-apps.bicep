@@ -51,6 +51,9 @@ param azureClientId string = ''
 @description('Container image tag.')
 param imageTag string = 'latest'
 
+@description('Allowed CORS origins (comma-separated).')
+param allowedOrigins string = ''
+
 // ---------------------------------------------------------------------------
 // Derived values
 // ---------------------------------------------------------------------------
@@ -166,6 +169,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'TABLE_STORAGE_ACCOUNT', value: storageAccountName }
             { name: 'ACS_CONNECTION_STRING', secretRef: 'acs-conn-str' }
             { name: 'EMAIL_SENDER', value: emailSender }
+            { name: 'ALLOWED_ORIGINS', value: allowedOrigins }
             { name: 'LOG_FORMAT', value: 'json' }
           ]
           probes: [
