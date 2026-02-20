@@ -14,7 +14,6 @@ import {
   Server,
   RefreshCw,
   DollarSign,
-  TrendingUp,
   AlertCircle,
   ClipboardList,
   ExternalLink,

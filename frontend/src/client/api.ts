@@ -240,6 +240,10 @@ export interface Workshop {
   description?: string
   status: "active" | "completed" | "draft" | "failed" | "deleted"
   region?: string
+  policy?: {
+    allowed_regions: string[]
+    allowed_services: string[]
+  }
   start_date: string
   end_date: string
   participants?: Participant[]
