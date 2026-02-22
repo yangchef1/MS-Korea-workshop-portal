@@ -2,6 +2,8 @@
 # Infrastructure Preview — Bicep What-If on PRs
 # =============================================================================
 # Runs `az deployment sub what-if` and posts results as a PR comment.
+# Selects the parameter file based on the PR's base branch:
+#   base=main → prod.bicepparam,  otherwise → dev.bicepparam
 
 name: "Infra Preview"
 
@@ -19,6 +21,8 @@ jobs:
   what-if:
     name: Bicep What-If
     runs-on: ubuntu-latest
+    env:
+      PARAM_FILE: ${{ github.base_ref == 'main' && 'prod' || 'dev' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -35,7 +39,7 @@ jobs:
           OUTPUT=$(az deployment sub what-if \
             --location koreacentral \
             --template-file infra/main.bicep \
-            --parameters infra/parameters/dev.bicepparam \
+            --parameters infra/parameters/${{ env.PARAM_FILE }}.bicepparam \
             spClientSecret='dummy' \
             acsConnectionString='dummy' \
             ghcrToken='dummy' \
@@ -49,13 +53,14 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const output = `### Bicep What-If Results
+            const env = '${{ env.PARAM_FILE }}';
+            const output = `### Bicep What-If Results (\`${env}\`)
 
             \`\`\`
             ${{ steps.whatif.outputs.result }}
             \`\`\`
 
-            > Triggered by commit ${{ github.sha }}`;
+            > Triggered by commit ${{ github.sha }} | Environment: **${env}**`;
 
             github.rest.issues.createComment({
               issue_number: context.issue.number,
