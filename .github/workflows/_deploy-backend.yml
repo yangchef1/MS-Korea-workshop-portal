@@ -1,0 +1,54 @@
+# =============================================================================
+# Reusable Workflow: Deploy Backend (Docker → GHCR → Container Apps)
+# =============================================================================
+# Called by the orchestrator (deploy.yml). Not triggered directly.
+
+name: _Deploy Backend
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "Target environment (dev | prod)"
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+  packages: write
+
+jobs:
+  deploy:
+    name: Deploy Backend (${{ inputs.environment }})
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    env:
+      GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/workshop-backend
+      CONTAINER_APP_NAME: ca-workshop-backend-${{ inputs.environment }}
+      RESOURCE_GROUP: rg-workshop-portal-${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_SP_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_SP_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Login to GHCR
+        run: echo '${{ secrets.GITHUB_TOKEN }}' | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Build & Push to GHCR
+        run: |
+          IMAGE=${{ env.GHCR_IMAGE }}:${{ github.sha }}
+          docker build -t $IMAGE -f Dockerfile .
+          docker push $IMAGE
+
+      - name: Update Container App
+        run: |
+          az containerapp update \
+            --name ${{ env.CONTAINER_APP_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --image ${{ env.GHCR_IMAGE }}:${{ github.sha }}

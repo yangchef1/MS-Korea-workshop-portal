@@ -1,145 +1,160 @@
 # =============================================================================
-# Deploy Pipeline: infra → (backend ∥ frontend)
+# Deploy Orchestrator
 # =============================================================================
-# infra must succeed (or be skipped) before app jobs run.
-# backend and frontend run in parallel after infra.
+# Detects which directories changed and dispatches to reusable workflows.
+#
+# Flow:
+#   detect-changes → deploy-infra → (deploy-backend ∥ deploy-frontend ∥ deploy-function)
+#
+# Branch → Environment mapping:
+#   main → prod,  dev → dev
+#
+# Path → Component mapping:
+#   infra/**           → infra  (+ triggers ALL other components)
+#   backend/** | Dockerfile → backend
+#   frontend/**        → frontend
+#   function/**        → function
 
 name: Deploy
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   workflow_dispatch:
     inputs:
       deploy_infra:
         description: "Force deploy infrastructure"
         type: boolean
         default: false
-
-permissions:
-  id-token: write # OIDC
-  contents: read
-  packages: write # GHCR
-
-env:
-  AZURE_LOCATION: koreacentral
-  ENV_NAME: ${{ github.ref == 'refs/heads/main' && 'prod' || 'dev' }}
-  GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/workshop-backend
-  CONTAINER_APP_NAME: ca-workshop-backend-${{ github.ref == 'refs/heads/main' && 'prod' || 'dev' }}
-  RESOURCE_GROUP: rg-workshop-portal-${{ github.ref == 'refs/heads/main' && 'prod' || 'dev' }}
-  SWA_NAME: swa-workshop-${{ github.ref == 'refs/heads/main' && 'prod' || 'dev' }}
+      deploy_backend:
+        description: "Force deploy backend"
+        type: boolean
+        default: false
+      deploy_frontend:
+        description: "Force deploy frontend"
+        type: boolean
+        default: false
+      deploy_function:
+        description: "Force deploy function"
+        type: boolean
+        default: false
 
 # ---------------------------------------------------------------------------
-# Job: Infrastructure (Bicep)
+# Job: Detect Changes
 # ---------------------------------------------------------------------------
 jobs:
-  infra:
-    name: Deploy Infrastructure
+  detect-changes:
+    name: Detect Changes
     runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.set-env.outputs.environment }}
+      infra: ${{ steps.filter.outputs.infra }}
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      function: ${{ steps.filter.outputs.function }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine environment
+        id: set-env
+        run: |
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            echo "environment=prod" >> $GITHUB_OUTPUT
+          else
+            echo "environment=dev" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Detect changed paths
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            infra:
+              - 'infra/**'
+            backend:
+              - 'backend/**'
+              - 'Dockerfile'
+            frontend:
+              - 'frontend/**'
+            function:
+              - 'function/**'
+
+  # ---------------------------------------------------------------------------
+  # Job: Deploy Infrastructure (Bicep)
+  # ---------------------------------------------------------------------------
+  deploy-infra:
+    name: Infrastructure
+    needs: [detect-changes]
     if: >-
-      github.event_name == 'workflow_dispatch' && github.event.inputs.deploy_infra == 'true'
-      || contains(github.event.head_commit.modified, 'infra/')
-    environment: ${{ github.ref == 'refs/heads/main' && 'prod' || 'dev' }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Azure Login (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_SP_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_SP_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Deploy Bicep
-        env:
-          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          AZURE_SP_TENANT_ID: ${{ secrets.AZURE_SP_TENANT_ID }}
-          AZURE_SP_CLIENT_ID: ${{ secrets.AZURE_SP_CLIENT_ID }}
-          AZURE_SP_CLIENT_SECRET: ${{ secrets.AZURE_SP_CLIENT_SECRET }}
-          AZURE_SP_DOMAIN: ${{ secrets.AZURE_SP_DOMAIN }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          AZURE_CLIENT_ID: ${{ vars.VITE_AZURE_CLIENT_ID }}
-          GHCR_IMAGE: ${{ env.GHCR_IMAGE }}
-          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
-          ACS_CONNECTION_STRING: ${{ secrets.ACS_CONNECTION_STRING }}
-        run: |
-          ENV_NAME=${{ github.ref == 'refs/heads/main' && 'prod' || 'dev' }}
-          az deployment sub create \
-            --location ${{ env.AZURE_LOCATION }} \
-            --template-file infra/main.bicep \
-            --parameters infra/parameters/${ENV_NAME}.bicepparam
+      needs.detect-changes.outputs.infra == 'true'
+      || (github.event_name == 'workflow_dispatch' && inputs.deploy_infra)
+    uses: ./.github/workflows/_deploy-infra.yml
+    with:
+      environment: ${{ needs.detect-changes.outputs.environment }}
+    secrets: inherit
+    permissions:
+      id-token: write
+      contents: read
 
   # ---------------------------------------------------------------------------
-  # Job: Backend (Docker → GHCR → Container Apps)
+  # Job: Deploy Backend (Docker → GHCR → Container Apps)
   # ---------------------------------------------------------------------------
-  backend:
-    name: Deploy Backend
-    runs-on: ubuntu-latest
-    needs: [infra]
-    if: always() && !cancelled() && (needs.infra.result == 'success' || needs.infra.result == 'skipped')
-    environment: ${{ github.ref == 'refs/heads/main' && 'prod' || 'dev' }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Azure Login (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_SP_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_SP_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Login to GHCR
-        run: echo '${{ secrets.GITHUB_TOKEN }}' | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-
-      - name: Build & Push to GHCR
-        run: |
-          IMAGE=${{ env.GHCR_IMAGE }}:${{ github.sha }}
-          docker build -t $IMAGE -f Dockerfile .
-          docker push $IMAGE
-
-      - name: Update Container App
-        run: |
-          az containerapp update \
-            --name ${{ env.CONTAINER_APP_NAME }} \
-            --resource-group ${{ env.RESOURCE_GROUP }} \
-            --image ${{ env.GHCR_IMAGE }}:${{ github.sha }}
+  deploy-backend:
+    name: Backend
+    needs: [detect-changes, deploy-infra]
+    if: >-
+      always() && !failure() && !cancelled()
+      && (
+        needs.detect-changes.outputs.backend == 'true'
+        || needs.detect-changes.outputs.infra == 'true'
+        || (github.event_name == 'workflow_dispatch' && inputs.deploy_backend)
+      )
+    uses: ./.github/workflows/_deploy-backend.yml
+    with:
+      environment: ${{ needs.detect-changes.outputs.environment }}
+    secrets: inherit
+    permissions:
+      id-token: write
+      contents: read
+      packages: write
 
   # ---------------------------------------------------------------------------
-  # Job: Frontend (Build → SWA Deploy)
+  # Job: Deploy Frontend (Build → SWA)
   # ---------------------------------------------------------------------------
-  frontend:
-    name: Deploy Frontend
-    runs-on: ubuntu-latest
-    needs: [infra]
-    if: always() && !cancelled() && (needs.infra.result == 'success' || needs.infra.result == 'skipped')
-    environment: ${{ github.ref == 'refs/heads/main' && 'prod' || 'dev' }}
-    steps:
-      - uses: actions/checkout@v4
+  deploy-frontend:
+    name: Frontend
+    needs: [detect-changes, deploy-infra]
+    if: >-
+      always() && !failure() && !cancelled()
+      && (
+        needs.detect-changes.outputs.frontend == 'true'
+        || needs.detect-changes.outputs.infra == 'true'
+        || (github.event_name == 'workflow_dispatch' && inputs.deploy_frontend)
+      )
+    uses: ./.github/workflows/_deploy-frontend.yml
+    with:
+      environment: ${{ needs.detect-changes.outputs.environment }}
+    secrets: inherit
+    permissions:
+      contents: read
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install & Build
-        working-directory: frontend
-        env:
-          VITE_AZURE_CLIENT_ID: ${{ vars.VITE_AZURE_CLIENT_ID }}
-          VITE_AZURE_TENANT_ID: ${{ vars.VITE_AZURE_TENANT_ID }}
-          VITE_AZURE_REDIRECT_URI: ${{ vars.VITE_AZURE_REDIRECT_URI }}
-          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
-        run: |
-          npm ci
-          npm run build
-
-      - name: Deploy to SWA
-        uses: azure/static-web-apps-deploy@v1
-        with:
-          azure_static_web_apps_api_token: ${{ secrets.SWA_DEPLOYMENT_TOKEN }}
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          action: upload
-          app_location: frontend/dist
-          skip_app_build: true
-          skip_api_build: true
+  # ---------------------------------------------------------------------------
+  # Job: Deploy Azure Functions
+  # ---------------------------------------------------------------------------
+  deploy-function:
+    name: Function
+    needs: [detect-changes, deploy-infra]
+    if: >-
+      always() && !failure() && !cancelled()
+      && (
+        needs.detect-changes.outputs.function == 'true'
+        || needs.detect-changes.outputs.infra == 'true'
+        || (github.event_name == 'workflow_dispatch' && inputs.deploy_function)
+      )
+    uses: ./.github/workflows/_deploy-function.yml
+    with:
+      environment: ${{ needs.detect-changes.outputs.environment }}
+    secrets: inherit
+    permissions:
+      id-token: write
+      contents: read
