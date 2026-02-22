@@ -8,7 +8,7 @@ param environmentName string
 @description('Location for ACS (typically "global").')
 param location string = 'global'
 
-var acsName = 'acs-workshop-${environmentName}'
+var acsName = 'acs-wsportal-${environmentName}'
 
 resource acs 'Microsoft.Communication/communicationServices@2023-04-01' = {
   name: acsName
