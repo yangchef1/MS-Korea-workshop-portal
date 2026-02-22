@@ -44,4 +44,6 @@ jobs:
         with:
           app-name: ${{ env.FUNCTION_APP_NAME }}
           package: function
-          scm-do-build-remote: true
+          scm-do-build-during-deployment: true
+          enable-oryx-build: true
+          remote-build: true

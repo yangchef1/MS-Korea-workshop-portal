@@ -33,7 +33,7 @@ param storageAccountName string
 // ---------------------------------------------------------------------------
 var functionAppName = 'func-workshop-cleanup-${environmentName}'
 var appServicePlanName = 'asp-workshop-cleanup-${environmentName}'
-var funcStorageName = 'stfuncws${environmentName}' // Separate storage for Functions runtime
+var funcStorageName = 'stfunccleanup${environmentName}' // Separate storage for Functions runtime
 var allowedSubsJoined = join(subscriptionIds, ',')
 
 // ---------------------------------------------------------------------------

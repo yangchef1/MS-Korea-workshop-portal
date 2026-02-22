@@ -5,7 +5,7 @@ using '../main.bicep'
 // =============================================================================
 param environmentName = 'dev'
 param location = 'koreacentral'
-param storageAccountName = 'stwsportaldev'
+param storageAccountName = 'stworkshopdatadev'
 param emailSender = ''
 
 // =============================================================================
