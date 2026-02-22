@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
     env:
-      FUNCTION_APP_NAME: func-workshop-cleanup-${{ inputs.environment }}
+      FUNCTION_APP_NAME: func-wsportal-cleanup-${{ inputs.environment }}
     steps:
       - uses: actions/checkout@v4
 
