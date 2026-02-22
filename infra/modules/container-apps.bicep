@@ -48,8 +48,8 @@ param azureTenantId string = tenantId
 @description('MSAL client ID for JWT validation.')
 param azureClientId string = ''
 
-@description('Container image tag.')
-param imageTag string = 'latest'
+@description('Container image tag. Set to empty string to use a placeholder image for initial deployment.')
+param imageTag string = ''
 
 @description('Allowed CORS origins (comma-separated).')
 param allowedOrigins string = ''
@@ -57,6 +57,9 @@ param allowedOrigins string = ''
 // ---------------------------------------------------------------------------
 // Derived values
 // ---------------------------------------------------------------------------
+// Use Azure quickstart placeholder when no real image is available yet.
+var usePlaceholder = empty(imageTag)
+var containerImage = usePlaceholder ? 'mcr.microsoft.com/k8se/quickstart:latest' : '${ghcrImage}:${imageTag}'
 var appName = 'ca-workshop-backend-${environmentName}'
 var envName = 'cae-workshop-${environmentName}'
 var logAnalyticsName = 'log-workshop-${environmentName}'
@@ -126,7 +129,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
           maxAge: 86400
         }
       }
-      registries: [
+      registries: usePlaceholder ? [] : [
         {
           server: 'ghcr.io'
           username: 'ghcr-pull'
@@ -152,7 +155,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
       containers: [
         {
           name: 'backend'
-          image: '${ghcrImage}:${imageTag}'
+          image: containerImage
           resources: {
             cpu: json('0.5')
             memory: '1Gi'
