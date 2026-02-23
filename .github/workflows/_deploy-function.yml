@@ -39,16 +39,20 @@ jobs:
           tenant-id: ${{ secrets.AZURE_SP_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Deploy to Azure Functions
+      - name: Install dependencies
         run: |
           cd function
-          zip -r ../function.zip .
+          pip install --target .python_packages/lib/site-packages -r requirements.txt
 
-      - name: Deploy via Azure CLI (config-zip)
+      - name: Create deployment package
+        run: |
+          cd function
+          zip -r ../function.zip . -x "__pycache__/*" "*.pyc"
+
+      - name: Deploy via Azure CLI
         run: |
           RESOURCE_GROUP="rg-workshop-portal-${{ inputs.environment }}"
           az functionapp deployment source config-zip \
             --name "$FUNCTION_APP_NAME" \
             --resource-group "$RESOURCE_GROUP" \
-            --src function.zip \
-            --build-remote true
+            --src function.zip
