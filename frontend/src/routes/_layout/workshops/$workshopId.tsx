@@ -26,7 +26,7 @@ import {
   FolderX,
 } from "lucide-react"
 
-import { workshopApi, type Participant, type AzureResource, type CostBreakdown, type DeletionFailure } from "@/client"
+import { workshopApi, type Participant, type AzureResource, type CostBreakdown, type DeletionFailure, type SubscriptionInfo } from "@/client"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -38,6 +38,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import useCustomToast from "@/hooks/useCustomToast"
+import useAuth from "@/hooks/useAuth"
 
 function getWorkshopQueryOptions(workshopId: string) {
   return {
@@ -50,8 +51,38 @@ export const Route = createFileRoute("/_layout/workshops/$workshopId")({
   component: WorkshopDetail,
 })
 
-function ParticipantRow({ participant }: { participant: Participant }) {
-  const { showSuccessToast } = useCustomToast()
+function ParticipantRow({
+  participant,
+  workshopId,
+  availableSubscriptions,
+  invalidAliases,
+}: {
+  participant: Participant
+  workshopId: string
+  availableSubscriptions?: SubscriptionInfo[]
+  invalidAliases: Set<string>
+}) {
+  const { showSuccessToast, showErrorToast } = useCustomToast()
+  const queryClient = useQueryClient()
+  const { user } = useAuth()
+
+  const alias = participant.alias || participant.name || participant.email
+  const isInvalid = alias ? invalidAliases.has(alias) : false
+  const [selectedSub, setSelectedSub] = useState(
+    participant.subscription_id || availableSubscriptions?.[0]?.subscription_id || ""
+  )
+
+  const reassignMutation = useMutation({
+    mutationFn: (subscriptionId: string) =>
+      workshopApi.reassignParticipantSubscription(workshopId, alias || participant.email, subscriptionId),
+    onSuccess: () => {
+      showSuccessToast("구독이 재배정되었습니다")
+      queryClient.invalidateQueries({ queryKey: ["workshop", workshopId] })
+    },
+    onError: () => {
+      showErrorToast("재배정에 실패했습니다")
+    },
+  })
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text)
@@ -59,30 +90,76 @@ function ParticipantRow({ participant }: { participant: Participant }) {
   }
 
   return (
-    <div className="flex items-center justify-between p-4 border rounded-lg">
-      <div className="flex flex-col gap-1">
-        <div className="font-medium">{participant.name}</div>
-        <div className="text-sm text-muted-foreground flex items-center gap-1">
-          <Mail className="h-3 w-3" />
-          {participant.email}
-        </div>
-        {participant.resource_group && (
-          <div className="text-sm text-muted-foreground">
-            리소스 그룹: {participant.resource_group}
+    <div className="flex flex-col gap-3 p-4 border rounded-lg">
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex flex-col gap-1">
+          <div className="font-medium">{alias}</div>
+          <div className="text-sm text-muted-foreground flex items-center gap-1">
+            <Mail className="h-3 w-3" />
+            {participant.email}
           </div>
-        )}
+          {participant.resource_group && (
+            <div className="text-sm text-muted-foreground">
+              리소스 그룹: {participant.resource_group}
+            </div>
+          )}
+          {participant.subscription_id && (
+            <div className="text-xs text-muted-foreground flex items-center gap-2">
+              <span className="font-medium">구독</span>
+              <span className={isInvalid ? "text-red-600" : ""}>
+                {participant.subscription_id}
+              </span>
+              {isInvalid && (
+                <span className="inline-flex items-center gap-1 text-red-600 text-xs">
+                  <AlertTriangle className="h-3 w-3" />
+                  유효하지 않은 구독
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+        <div className="flex gap-2">
+          {participant.user_principal_name && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => copyToClipboard(participant.user_principal_name!)}
+            >
+              <Copy className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
       </div>
-      <div className="flex gap-2">
-        {participant.user_principal_name && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => copyToClipboard(participant.user_principal_name!)}
+
+      {isInvalid && user?.role === "admin" && availableSubscriptions?.length ? (
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <span className="text-muted-foreground">가용 구독 중 선택</span>
+          <select
+            className="border rounded px-2 py-1 text-sm"
+            value={selectedSub}
+            onChange={(e) => setSelectedSub(e.target.value)}
           >
-            <Copy className="h-4 w-4" />
+            {availableSubscriptions.map((sub) => (
+              <option key={sub.subscription_id} value={sub.subscription_id}>
+                {sub.display_name || sub.subscription_id}
+              </option>
+            ))}
+          </select>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => reassignMutation.mutate(selectedSub)}
+            disabled={reassignMutation.isPending || !selectedSub}
+          >
+            {reassignMutation.isPending ? (
+              <RefreshCw className="h-4 w-4 animate-spin mr-1" />
+            ) : (
+              <RotateCw className="h-4 w-4 mr-1" />
+            )}
+            재배정
           </Button>
-        )}
-      </div>
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -576,6 +653,9 @@ function DeletionFailuresTab({ workshopId }: { workshopId: string }) {
 
 function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
   const { data: workshop } = useSuspenseQuery(getWorkshopQueryOptions(workshopId))
+  const invalidAliases = new Set(
+    workshop.invalid_participants?.map((p) => p.alias) || []
+  )
   
   // Resources and Cost queries for refresh functionality
   const { refetch: refetchResources, isRefetching: isRefetchingResources } = useQuery({
@@ -709,12 +789,24 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
               <CardDescription>
                 워크샵에 등록된 참가자 목록입니다
               </CardDescription>
+              {invalidAliases.size > 0 && (
+                <div className="flex items-center gap-2 text-sm text-amber-600 mt-1">
+                  <AlertTriangle className="h-4 w-4" />
+                  유효하지 않은 구독이 배정된 참가자 {invalidAliases.size}명. 관리자만 재배정할 수 있습니다.
+                </div>
+              )}
             </CardHeader>
             <CardContent>
               {workshop.participants && workshop.participants.length > 0 ? (
                 <div className="space-y-3">
                   {workshop.participants.map((participant, index) => (
-                    <ParticipantRow key={index} participant={participant} />
+                    <ParticipantRow
+                      key={participant.alias || participant.email || index}
+                      participant={participant}
+                      workshopId={workshop.id}
+                      availableSubscriptions={workshop.available_subscriptions}
+                      invalidAliases={invalidAliases}
+                    />
                   ))}
                 </div>
               ) : (
