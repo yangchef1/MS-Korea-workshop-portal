@@ -25,7 +25,6 @@ jobs:
     env:
       FUNCTION_APP_NAME: func-workshop-cleanup-${{ inputs.environment }}
       RESOURCE_GROUP: rg-workshop-portal-${{ inputs.environment }}
-      FUNCTION_STORAGE_ACCOUNT: stfuncws${{ inputs.environment }}
     steps:
       - uses: actions/checkout@v4
 
@@ -58,6 +57,15 @@ jobs:
 
           CONTAINER_NAME="function-releases"
           PACKAGE_NAME="function-${{ github.sha }}.zip"
+          FUNCTION_STORAGE_ACCOUNT="$(az functionapp config appsettings list \
+            --name "$FUNCTION_APP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query "[?name=='AzureWebJobsStorage__accountName'].value | [0]" \
+            -o tsv)"
+          if [ -z "$FUNCTION_STORAGE_ACCOUNT" ]; then
+            echo "Failed to resolve AzureWebJobsStorage__accountName from Function App settings"
+            exit 1
+          fi
           RUNNER_IP="$(curl -fsSL https://api.ipify.org)"
           ORIGINAL_PUBLIC_NETWORK_ACCESS="$(az storage account show \
             --resource-group "$RESOURCE_GROUP" \
