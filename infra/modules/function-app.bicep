@@ -139,10 +139,15 @@ resource funcStorageTableContributor 'Microsoft.Authorization/roleAssignments@20
   }
 }
 
+// Reference to the existing workshop storage account
+resource workshopStorage 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {
+  name: storageAccountName
+}
+
 // Workshop data storage access (Tables) for Function App managed identity
 resource workshopStorageTableContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(workshopStorageAccountId, functionApp.id, 'workshop-table-contributor')
-  scope: workshopStorageAccountId
+  scope: workshopStorage
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '76199698-9eea-4c19-bc07-45e0e9d74c54') // Storage Table Data Contributor
     principalId: functionApp.identity.principalId
