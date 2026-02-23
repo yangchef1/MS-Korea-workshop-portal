@@ -106,6 +106,20 @@ class ParticipantData(BaseModel):
     object_id: str
 
 
+class SubscriptionInfo(BaseModel):
+    """구독 표시 정보."""
+
+    subscription_id: str
+    display_name: Optional[str] = None
+
+
+class InvalidParticipant(BaseModel):
+    """유효하지 않은 구독이 배정된 참가자 정보."""
+
+    alias: str
+    subscription_id: str
+
+
 class PolicyData(BaseModel):
     """워크샵 메타데이터에 저장되는 정책 데이터."""
 
@@ -193,6 +207,8 @@ class WorkshopDetail(BaseModel):
     currency: str = "USD"
     cost_breakdown: Optional[list[dict]] = None
     survey_url: Optional[str] = None
+    available_subscriptions: Optional[list[SubscriptionInfo]] = None
+    invalid_participants: Optional[list[InvalidParticipant]] = None
 
 
 class CostResponse(BaseModel):
