@@ -58,11 +58,36 @@ jobs:
 
           CONTAINER_NAME="function-releases"
           PACKAGE_NAME="function-${{ github.sha }}.zip"
+          RUNNER_IP="$(curl -fsSL https://api.ipify.org)"
 
-          az storage container create \
-            --name "$CONTAINER_NAME" \
+          cleanup() {
+            az storage account network-rule remove \
+              --resource-group "$RESOURCE_GROUP" \
+              --account-name "$FUNCTION_STORAGE_ACCOUNT" \
+              --ip-address "$RUNNER_IP" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          az storage account network-rule add \
+            --resource-group "$RESOURCE_GROUP" \
             --account-name "$FUNCTION_STORAGE_ACCOUNT" \
-            --auth-mode login
+            --ip-address "$RUNNER_IP"
+
+          for attempt in {1..9}; do
+            if az storage container create \
+              --name "$CONTAINER_NAME" \
+              --account-name "$FUNCTION_STORAGE_ACCOUNT" \
+              --auth-mode login >/dev/null 2>&1; then
+              break
+            fi
+
+            if [ "$attempt" -eq 9 ]; then
+              echo "Storage network rule propagation timeout"
+              exit 1
+            fi
+
+            sleep 10
+          done
 
           az storage blob upload \
             --account-name "$FUNCTION_STORAGE_ACCOUNT" \
@@ -77,6 +102,7 @@ jobs:
             --account-name "$FUNCTION_STORAGE_ACCOUNT" \
             --container-name "$CONTAINER_NAME" \
             --name "$PACKAGE_NAME" \
+            --as-user \
             --permissions r \
             --expiry "$SAS_EXPIRY" \
             --https-only \
