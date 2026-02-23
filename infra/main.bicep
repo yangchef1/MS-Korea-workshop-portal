@@ -146,6 +146,7 @@ module functionApp 'modules/function-app.bicep' = {
     spClientSecret: spClientSecret
     spDomain: spDomain
     storageAccountName: storageAccountName
+    workshopStorageAccountId: storage.outputs.storageAccountId
   }
 }
 
