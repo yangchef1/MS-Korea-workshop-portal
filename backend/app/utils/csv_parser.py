@@ -6,11 +6,9 @@ import re
 
 from fastapi import UploadFile
 
-from app.config import settings
 from app.exceptions import (
     CSVParsingError,
     InvalidFormatError,
-    InvalidSubscriptionError,
     UnsupportedFileTypeError,
 )
 
@@ -55,11 +53,11 @@ async def parse_participants_csv(file: UploadFile) -> list[dict[str, str]]:
 
     Supported CSV formats::
 
-        # 1-column (email only) — uses default subscription
+        # 1-column (email only) — subscription auto-assigned later
         email
         johndoe@company.com
 
-        # 2-column (email, subscription_id) — per-participant subscription
+        # 2-column (email, subscription_id)
         email,subscription_id
         johndoe@company.com,00000000-0000-0000-0000-000000000000
 
@@ -68,6 +66,7 @@ async def parse_participants_csv(file: UploadFile) -> list[dict[str, str]]:
 
     Returns:
         'alias', 'email', 'subscription_id' 키를 가진 참가자 딕셔너리 리스트.
+        subscription_id가 없으면 빈 문자열로 반환하며, 후속 구독 배정 단계에서 채운다.
 
     Raises:
         UnsupportedFileTypeError: CSV 파일이 아닌 경우.
@@ -190,14 +189,10 @@ def _extract_subscription_id(
         row_num: Row number for error messages.
 
     Returns:
-        Validated subscription_id string.
-
-    Raises:
-        InvalidFormatError: If the UUID format is invalid.
-        InvalidSubscriptionError: If the subscription is not in the allowed list.
+        subscription_id 문자열 (없으면 빈 문자열). UUID 형식만 검증하며, 허용 목록 검증은 후단 서비스에서 수행한다.
     """
     if not has_two_columns or len(columns) < 2 or not columns[1]:
-        return settings.azure_subscription_id
+        return ""
 
     sub_id = columns[1]
 
@@ -206,12 +201,6 @@ def _extract_subscription_id(
             f"Invalid subscription ID format '{sub_id}' at row {row_num}",
             field="subscription_id",
             expected_format="UUID (e.g., 00000000-0000-0000-0000-000000000000)",
-        )
-
-    if not settings.is_valid_subscription(sub_id):
-        raise InvalidSubscriptionError(
-            f"Subscription '{sub_id}' at row {row_num} is not in the allowed list",
-            subscription_id=sub_id,
         )
 
     return sub_id

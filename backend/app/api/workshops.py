@@ -20,7 +20,9 @@ from app.core.deps import (
     get_entra_id_service,
     get_policy_service,
     get_resource_manager_service,
+    get_subscription_service,
     get_storage_service,
+     require_admin,
 )
 from app.exceptions import InvalidInputError, NotFoundError
 from app.models import (
@@ -102,6 +104,12 @@ class EmailSendResponse(BaseModel):
     sent: int
     failed: int
     results: dict
+
+
+class ParticipantSubscriptionUpdate(BaseModel):
+    """참가자 구독 재배정 요청."""
+
+    subscription_id: str
 
 
 @router.get("/resource-types", response_model=list[ResourceType])
@@ -195,9 +203,25 @@ async def get_workshop(
     workshop_id: str,
     storage=Depends(get_storage_service),
     cost=Depends(get_cost_service),
+    subscription_service=Depends(get_subscription_service),
 ):
     """워크샵 상세 정보를 조회한다."""
     metadata = await _get_workshop_or_raise(storage, workshop_id)
+
+    subscription_data = await subscription_service.get_available_subscriptions()
+    available_subs = subscription_data.get("subscriptions", [])
+    valid_ids = {s.get("subscription_id", "").lower() for s in available_subs}
+
+    participants_data = metadata.get("participants", [])
+    invalid_participants = [
+        {
+            "alias": p.get("alias", ""),
+            "subscription_id": p.get("subscription_id", ""),
+        }
+        for p in participants_data
+        if p.get("subscription_id")
+        and p.get("subscription_id", "").lower() not in valid_ids
+    ]
 
     cost_specs = _build_cost_specs(metadata.get("participants", []))
     cost_data = await cost.get_workshop_total_cost(cost_specs, days=30)
@@ -216,6 +240,61 @@ async def get_workshop(
         currency=cost_data.get("currency", "USD"),
         cost_breakdown=cost_data.get("breakdown"),
         survey_url=metadata.get("survey_url") or None,
+        available_subscriptions=available_subs,
+        invalid_participants=invalid_participants or None,
+    )
+
+
+@router.patch(
+    "/{workshop_id}/participants/{alias}/subscription",
+    response_model=MessageResponse,
+)
+async def update_participant_subscription(
+    workshop_id: str,
+    alias: str,
+    payload: ParticipantSubscriptionUpdate,
+    storage=Depends(get_storage_service),
+    subscription_service=Depends(get_subscription_service),
+    _: dict = Depends(require_admin),
+):
+    """참가자의 구독을 수동 재배정한다 (관리자 전용)."""
+    metadata = await _get_workshop_or_raise(storage, workshop_id)
+
+    subscription_data = await subscription_service.get_available_subscriptions(
+        force_refresh=True
+    )
+    available_subs = subscription_data.get("subscriptions", [])
+    target_sub = payload.subscription_id.lower()
+    available_map = {
+        sub.get("subscription_id", "").lower(): sub.get("subscription_id", "")
+        for sub in available_subs
+    }
+
+    if target_sub not in available_map:
+        raise InvalidInputError(
+            f"Subscription '{payload.subscription_id}' is not available for assignment"
+        )
+
+    participants = metadata.get("participants", [])
+    updated = False
+    for participant in participants:
+        if participant.get("alias") == alias:
+            participant["subscription_id"] = available_map[target_sub]
+            updated = True
+            break
+
+    if not updated:
+        raise NotFoundError(
+            f"Participant '{alias}' not found in workshop '{workshop_id}'",
+            resource_type="Participant",
+        )
+
+    metadata["participants"] = participants
+    await storage.save_workshop_metadata(workshop_id, metadata)
+
+    return MessageResponse(
+        message="Subscription reassigned",
+        detail=f"Participant '{alias}' now uses subscription '{available_map[target_sub]}'",
     )
 
 
@@ -304,10 +383,12 @@ async def create_workshop(
     entra_id=Depends(get_entra_id_service),
     resource_mgr=Depends(get_resource_manager_service),
     policy=Depends(get_policy_service),
+    subscription_service=Depends(get_subscription_service),
 ):
     """새 워크샵을 생성한다.
 
     CSV 형식: 이메일만 포함하는 단일 컬럼 또는 이메일+subscription_id 2컬럼.
+    구독 미지정 시 포털 설정에 따라 자동 배정한다.
     Azure 리소스 생성 후 DB 저장이 실패하면 보상 트랜잭션(rollback)을 수행한다.
     """
     # Step 0: 입력값 사전 검증 (Azure 리소스 생성 전에 빠르게 실패)
@@ -330,6 +411,8 @@ async def create_workshop(
     try:
         workshop_id = str(uuid.uuid4())
         participants = await parse_participants_csv(participants_file)
+        assignment = await subscription_service.assign_subscriptions(participants)
+        participants = assignment["participants"]
 
         logger.info(
             "Creating workshop '%s' with %d participants",
@@ -349,9 +432,7 @@ async def create_workshop(
         alias_to_sub = {p["alias"]: p["subscription_id"] for p in participants}
         for user in user_results:
             user["email"] = alias_to_email.get(user["alias"], "")
-            user["subscription_id"] = alias_to_sub.get(
-                user["alias"], settings.azure_subscription_id
-            )
+            user["subscription_id"] = alias_to_sub.get(user["alias"], "")
 
         # Step 2: 리소스 그룹 생성
         rg_specs = [

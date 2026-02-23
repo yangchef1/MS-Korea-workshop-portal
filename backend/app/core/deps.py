@@ -13,6 +13,7 @@ from app.services.entra_id import entra_id_service
 from app.services.policy import policy_service
 from app.services.resource_manager import resource_manager_service
 from app.services.role import role_service
+from app.services.subscription import subscription_service
 from app.services.storage import storage_service
 
 
@@ -49,6 +50,11 @@ def get_email_service():
 def get_role_service():
     """RoleService 싱글턴을 반환한다."""
     return role_service
+
+
+def get_subscription_service():
+    """SubscriptionService 싱글턴을 반환한다."""
+    return subscription_service
 
 
 def get_current_user(request: Request) -> Optional[dict[str, Any]]:
