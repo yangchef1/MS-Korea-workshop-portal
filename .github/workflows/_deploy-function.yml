@@ -62,8 +62,7 @@ jobs:
           az storage container create \
             --name "$CONTAINER_NAME" \
             --account-name "$FUNCTION_STORAGE_ACCOUNT" \
-            --auth-mode login \
-            --fail-on-exist false
+            --auth-mode login
 
           az storage blob upload \
             --account-name "$FUNCTION_STORAGE_ACCOUNT" \
