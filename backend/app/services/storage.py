@@ -33,11 +33,14 @@ PASSWORDS_TABLE = "passwords"
 TEMPLATES_TABLE = "templates"
 USERS_TABLE = "users"
 DELETION_FAILURES_TABLE = "deletionfailures"
+PORTAL_SETTINGS_TABLE = "portalsettings"
 
 WORKSHOP_PARTITION_KEY = "workshop"
 PASSWORD_PARTITION_KEY = "password"
 TEMPLATE_PARTITION_KEY = "template"
 USER_PARTITION_KEY = "user"
+PORTAL_SETTINGS_PARTITION_KEY = "config"
+PORTAL_SETTINGS_ROW_KEY_SUBSCRIPTIONS = "subscriptions"
 
 
 class StorageService:
@@ -91,7 +94,14 @@ class StorageService:
         """필요한 테이블이 존재하지 않으면 생성한다 (lazy 초기화)."""
         if StorageService._tables_initialized:
             return
-        for table_name in (WORKSHOPS_TABLE, PASSWORDS_TABLE, TEMPLATES_TABLE, USERS_TABLE, DELETION_FAILURES_TABLE):
+        for table_name in (
+            WORKSHOPS_TABLE,
+            PASSWORDS_TABLE,
+            TEMPLATES_TABLE,
+            USERS_TABLE,
+            DELETION_FAILURES_TABLE,
+            PORTAL_SETTINGS_TABLE,
+        ):
             try:
                 await self.table_service_client.create_table_if_not_exists(table_name)
                 logger.info("Ensured table exists: %s", table_name)
@@ -413,6 +423,63 @@ class StorageService:
             return users
         except Exception as e:
             logger.error("Failed to list portal users: %s", e)
+            raise
+
+    # ------------------------------------------------------------------
+    # Portal settings (subscriptions allow/deny)
+    # ------------------------------------------------------------------
+
+    async def get_portal_subscription_settings(self) -> dict[str, list[str]]:
+        """구독 허용/제외 설정을 조회한다.
+
+        Returns:
+            allow_list와 deny_list를 포함하는 딕셔너리. 설정이 없으면 빈 리스트를 반환한다.
+        """
+        await self._ensure_tables_exist()
+
+        try:
+            table_client = self.table_service_client.get_table_client(PORTAL_SETTINGS_TABLE)
+            entity = await table_client.get_entity(
+                partition_key=PORTAL_SETTINGS_PARTITION_KEY,
+                row_key=PORTAL_SETTINGS_ROW_KEY_SUBSCRIPTIONS,
+            )
+            return {
+                "allow_list": json.loads(entity.get("allow_list_json", "[]")),
+                "deny_list": json.loads(entity.get("deny_list_json", "[]")),
+            }
+        except ResourceNotFoundError:
+            return {"allow_list": [], "deny_list": []}
+        except Exception as e:
+            logger.error("Failed to get portal subscription settings: %s", e)
+            raise
+
+    async def save_portal_subscription_settings(
+        self, allow_list: list[str], deny_list: list[str]
+    ) -> dict[str, list[str]]:
+        """구독 허용/제외 설정을 저장한다.
+
+        Args:
+            allow_list: 허용 구독 ID 목록(빈 리스트면 전체 허용).
+            deny_list: 제외 구독 ID 목록.
+
+        Returns:
+            저장된 allow_list와 deny_list.
+        """
+        await self._ensure_tables_exist()
+
+        try:
+            table_client = self.table_service_client.get_table_client(PORTAL_SETTINGS_TABLE)
+            entity = {
+                "PartitionKey": PORTAL_SETTINGS_PARTITION_KEY,
+                "RowKey": PORTAL_SETTINGS_ROW_KEY_SUBSCRIPTIONS,
+                "allow_list_json": json.dumps(allow_list),
+                "deny_list_json": json.dumps(deny_list),
+            }
+            await table_client.upsert_entity(entity)
+            logger.info("Saved portal subscription settings (allow=%d, deny=%d)", len(allow_list), len(deny_list))
+            return {"allow_list": allow_list, "deny_list": deny_list}
+        except Exception as e:
+            logger.error("Failed to save portal subscription settings: %s", e)
             raise
 
     # ------------------------------------------------------------------

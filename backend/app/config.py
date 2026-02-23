@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     azure_sp_domain: str = os.getenv("AZURE_SP_DOMAIN", "yourdomain.com")
     azure_subscription_id: str = os.getenv("AZURE_SUBSCRIPTION_ID", "")
 
+    # 구독 캐싱/필터링
+    subscription_cache_ttl_seconds: int = int(
+        os.getenv("SUBSCRIPTION_CACHE_TTL_SECONDS", "60")
+    )
+
     # Multi-subscription support: comma-separated list of allowed subscription IDs
     allowed_subscription_ids_raw: str = os.getenv("ALLOWED_SUBSCRIPTION_IDS", "")
 
@@ -142,16 +147,22 @@ class Settings(BaseSettings):
 
     @property
     def allowed_subscription_ids(self) -> list[str]:
-        """Parse ALLOWED_SUBSCRIPTION_IDS into a list, falling back to the default SP subscription."""
-        parsed = [
+        """Parse ALLOWED_SUBSCRIPTION_IDS into a list; empty means "allow all"."""
+        return [
             s.strip()
             for s in self.allowed_subscription_ids_raw.split(",")
             if s.strip()
         ]
-        return parsed if parsed else ([self.azure_subscription_id] if self.azure_subscription_id else [])
+
+    @property
+    def deployment_subscription_id(self) -> str:
+        """Subscription used for portal deployment (always excluded from assignment)."""
+        return self.azure_subscription_id
 
     def is_valid_subscription(self, subscription_id: str) -> bool:
-        """Check whether a subscription ID is in the allowed list."""
+        """Check whether a subscription ID is in the allowed list (or allow-all when empty)."""
+        if not self.allowed_subscription_ids:
+            return True
         return subscription_id in self.allowed_subscription_ids
 
 

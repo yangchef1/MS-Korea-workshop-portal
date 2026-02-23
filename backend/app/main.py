@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import auth, templates, workshops
+from app.api import admin_subscriptions, auth, templates, workshops
 from app.config import settings
 from app.exceptions import AppError
 from app.middleware.auth import AuthMiddleware
@@ -76,6 +76,7 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/api", tags=["Auth"])
 app.include_router(workshops.router, prefix="/api", tags=["Workshops"])
 app.include_router(templates.router, prefix="/api", tags=["Templates"])
+app.include_router(admin_subscriptions.router, prefix="/api", tags=["Admin"])
 
 
 @app.exception_handler(AppError)
