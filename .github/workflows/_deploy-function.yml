@@ -59,14 +59,44 @@ jobs:
           CONTAINER_NAME="function-releases"
           PACKAGE_NAME="function-${{ github.sha }}.zip"
           RUNNER_IP="$(curl -fsSL https://api.ipify.org)"
+          ORIGINAL_PUBLIC_NETWORK_ACCESS="$(az storage account show \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$FUNCTION_STORAGE_ACCOUNT" \
+            --query publicNetworkAccess \
+            -o tsv)"
+          ORIGINAL_DEFAULT_ACTION="$(az storage account show \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$FUNCTION_STORAGE_ACCOUNT" \
+            --query networkRuleSet.defaultAction \
+            -o tsv)"
 
           cleanup() {
             az storage account network-rule remove \
               --resource-group "$RESOURCE_GROUP" \
               --account-name "$FUNCTION_STORAGE_ACCOUNT" \
               --ip-address "$RUNNER_IP" >/dev/null 2>&1 || true
+
+            az storage account update \
+              --resource-group "$RESOURCE_GROUP" \
+              --name "$FUNCTION_STORAGE_ACCOUNT" \
+              --default-action "$ORIGINAL_DEFAULT_ACTION" >/dev/null 2>&1 || true
+
+            az storage account update \
+              --resource-group "$RESOURCE_GROUP" \
+              --name "$FUNCTION_STORAGE_ACCOUNT" \
+              --public-network-access "$ORIGINAL_PUBLIC_NETWORK_ACCESS" >/dev/null 2>&1 || true
           }
           trap cleanup EXIT
+
+          az storage account update \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$FUNCTION_STORAGE_ACCOUNT" \
+            --public-network-access Enabled >/dev/null
+
+          az storage account update \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$FUNCTION_STORAGE_ACCOUNT" \
+            --default-action Deny >/dev/null
 
           az storage account network-rule add \
             --resource-group "$RESOURCE_GROUP" \
