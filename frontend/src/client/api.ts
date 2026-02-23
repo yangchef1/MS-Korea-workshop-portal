@@ -234,6 +234,33 @@ export interface AddUserRequest {
   name?: string
 }
 
+export interface SubscriptionInfo {
+  subscription_id: string
+  display_name?: string
+}
+
+export interface InvalidParticipant {
+  alias: string
+  subscription_id: string
+}
+
+export interface SubscriptionSettingsResponse {
+  subscriptions: SubscriptionInfo[]
+  allow_list: string[]
+  deny_list: string[]
+  pruned_ids?: string[]
+  from_cache?: boolean
+}
+
+export interface Participant {
+  alias?: string
+  name?: string
+  email: string
+  resource_group: string
+  user_principal_name?: string
+  subscription_id?: string
+}
+
 export interface Workshop {
   id: string
   name: string
@@ -251,13 +278,8 @@ export interface Workshop {
   created_at: string
   updated_at?: string
   survey_url?: string
-}
-
-export interface Participant {
-  name: string
-  email: string
-  resource_group: string
-  user_principal_name?: string
+  available_subscriptions?: SubscriptionInfo[]
+  invalid_participants?: InvalidParticipant[]
 }
 
 export interface AzureResource {
@@ -507,6 +529,39 @@ export const workshopApi = {
   ): Promise<{ message: string; detail?: string }> => {
     const response = await apiClient.post(
       `/workshops/${workshopId}/deletion-failures/retry-all`
+    )
+    return response.data
+  },
+
+  /** 참가자 구독을 수동 재배정한다. */
+  reassignParticipantSubscription: async (
+    workshopId: string,
+    alias: string,
+    subscriptionId: string
+  ): Promise<void> => {
+    await apiClient.patch(
+      `/workshops/${workshopId}/participants/${alias}/subscription`,
+      { subscription_id: subscriptionId }
+    )
+  },
+}
+
+export const subscriptionAdminApi = {
+  get: async (refresh = false): Promise<SubscriptionSettingsResponse> => {
+    const response = await apiClient.get<SubscriptionSettingsResponse>(
+      "/admin/subscriptions",
+      { params: { refresh } }
+    )
+    return response.data
+  },
+
+  update: async (
+    allow_list: string[],
+    deny_list: string[]
+  ): Promise<SubscriptionSettingsResponse> => {
+    const response = await apiClient.put<SubscriptionSettingsResponse>(
+      "/admin/subscriptions",
+      { allow_list, deny_list }
     )
     return response.data
   },

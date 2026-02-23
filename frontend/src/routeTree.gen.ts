@@ -14,6 +14,7 @@ import { Route as LayoutRouteImport } from './routes/_layout'
 import { Route as LayoutIndexRouteImport } from './routes/_layout/index'
 import { Route as LayoutUsersRouteImport } from './routes/_layout/users'
 import { Route as LayoutTemplatesRouteImport } from './routes/_layout/templates'
+import { Route as LayoutSubscriptionsRouteImport } from './routes/_layout/subscriptions'
 import { Route as LayoutWorkshopsCreateRouteImport } from './routes/_layout/workshops/create'
 import { Route as LayoutWorkshopsWorkshopIdRouteImport } from './routes/_layout/workshops/$workshopId'
 
@@ -41,6 +42,11 @@ const LayoutTemplatesRoute = LayoutTemplatesRouteImport.update({
   path: '/templates',
   getParentRoute: () => LayoutRoute,
 } as any)
+const LayoutSubscriptionsRoute = LayoutSubscriptionsRouteImport.update({
+  id: '/subscriptions',
+  path: '/subscriptions',
+  getParentRoute: () => LayoutRoute,
+} as any)
 const LayoutWorkshopsCreateRoute = LayoutWorkshopsCreateRouteImport.update({
   id: '/workshops/create',
   path: '/workshops/create',
@@ -56,6 +62,7 @@ const LayoutWorkshopsWorkshopIdRoute =
 export interface FileRoutesByFullPath {
   '/': typeof LayoutIndexRoute
   '/login': typeof LoginRoute
+  '/subscriptions': typeof LayoutSubscriptionsRoute
   '/templates': typeof LayoutTemplatesRoute
   '/users': typeof LayoutUsersRoute
   '/workshops/$workshopId': typeof LayoutWorkshopsWorkshopIdRoute
@@ -63,6 +70,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
+  '/subscriptions': typeof LayoutSubscriptionsRoute
   '/templates': typeof LayoutTemplatesRoute
   '/users': typeof LayoutUsersRoute
   '/': typeof LayoutIndexRoute
@@ -74,6 +82,7 @@ export interface FileRoutesById {
   '/_layout': typeof LayoutRouteWithChildren
   '/login': typeof LoginRoute
   '/_layout/templates': typeof LayoutTemplatesRoute
+  '/_layout/subscriptions': typeof LayoutSubscriptionsRoute
   '/_layout/users': typeof LayoutUsersRoute
   '/_layout/': typeof LayoutIndexRoute
   '/_layout/workshops/$workshopId': typeof LayoutWorkshopsWorkshopIdRoute
@@ -91,6 +100,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/login'
+    | '/subscriptions'
     | '/templates'
     | '/users'
     | '/'
@@ -100,6 +110,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/_layout'
     | '/login'
+    | '/_layout/subscriptions'
     | '/_layout/templates'
     | '/_layout/users'
     | '/_layout/'
@@ -142,6 +153,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutUsersRouteImport
       parentRoute: typeof LayoutRoute
     }
+    '/_layout/subscriptions': {
+      id: '/_layout/subscriptions'
+      path: '/subscriptions'
+      fullPath: '/subscriptions'
+      preLoaderRoute: typeof LayoutSubscriptionsRouteImport
+      parentRoute: typeof LayoutRoute
+    }
     '/_layout/templates': {
       id: '/_layout/templates'
       path: '/templates'
@@ -168,6 +186,7 @@ declare module '@tanstack/react-router' {
 
 interface LayoutRouteChildren {
   LayoutTemplatesRoute: typeof LayoutTemplatesRoute
+  LayoutSubscriptionsRoute: typeof LayoutSubscriptionsRoute
   LayoutUsersRoute: typeof LayoutUsersRoute
   LayoutIndexRoute: typeof LayoutIndexRoute
   LayoutWorkshopsWorkshopIdRoute: typeof LayoutWorkshopsWorkshopIdRoute
@@ -176,6 +195,7 @@ interface LayoutRouteChildren {
 
 const LayoutRouteChildren: LayoutRouteChildren = {
   LayoutTemplatesRoute: LayoutTemplatesRoute,
+  LayoutSubscriptionsRoute: LayoutSubscriptionsRoute,
   LayoutUsersRoute: LayoutUsersRoute,
   LayoutIndexRoute: LayoutIndexRoute,
   LayoutWorkshopsWorkshopIdRoute: LayoutWorkshopsWorkshopIdRoute,

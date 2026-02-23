@@ -35,6 +35,7 @@ interface MenuItem {
 const menuItems: MenuItem[] = [
   { icon: Home, title: "홈", path: "/" },
   { icon: Users, title: "유저 관리", path: "/users", adminOnly: true },
+  { icon: Shield, title: "구독 관리", path: "/subscriptions", adminOnly: true },
   { icon: FileCode, title: "템플릿 관리", path: "/templates", adminOnly: true },
 ]
 
