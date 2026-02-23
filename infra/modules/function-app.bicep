@@ -28,6 +28,9 @@ param spDomain string
 @description('Workshop Table Storage account name.')
 param storageAccountName string
 
+@description('Workshop Table Storage account resource ID.')
+param workshopStorageAccountId string
+
 // ---------------------------------------------------------------------------
 // Derived values
 // ---------------------------------------------------------------------------
@@ -49,6 +52,7 @@ resource funcStorage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   properties: {
     supportsHttpsTrafficOnly: true
     minimumTlsVersion: 'TLS1_2'
+    allowSharedKeyAccess: false
   }
 }
 
@@ -84,7 +88,7 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
     siteConfig: {
       linuxFxVersion: 'PYTHON|3.11'
       appSettings: [
-        { name: 'AzureWebJobsStorage', value: 'DefaultEndpointsProtocol=https;AccountName=${funcStorage.name};EndpointSuffix=core.windows.net;AccountKey=${funcStorage.listKeys().keys[0].value}' }
+        { name: 'AzureWebJobsStorage__accountName', value: funcStorage.name }
         { name: 'FUNCTIONS_WORKER_RUNTIME', value: 'python' }
         { name: 'FUNCTIONS_EXTENSION_VERSION', value: '~4' }
         { name: 'ALLOWED_SUBSCRIPTION_IDS', value: allowedSubsJoined }
@@ -99,6 +103,50 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
   tags: {
     project: 'workshop-portal'
     environment: environmentName
+  }
+}
+
+// ---------------------------------------------------------------------------
+// RBAC role assignments for Function App managed identity
+// ---------------------------------------------------------------------------
+resource funcStorageBlobOwner 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(funcStorage.id, functionApp.id, 'blob-owner')
+  scope: funcStorage
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe') // Storage Blob Data Owner
+    principalId: functionApp.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource funcStorageQueueContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(funcStorage.id, functionApp.id, 'queue-contributor')
+  scope: funcStorage
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '974c5e8b-45b9-4653-ba55-5f855dd0fb88') // Storage Queue Data Contributor
+    principalId: functionApp.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource funcStorageTableContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(funcStorage.id, functionApp.id, 'table-contributor')
+  scope: funcStorage
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '76199698-9eea-4c19-bc07-45e0e9d74c54') // Storage Table Data Contributor
+    principalId: functionApp.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// Workshop data storage access (Tables) for Function App managed identity
+resource workshopStorageTableContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(workshopStorageAccountId, functionApp.id, 'workshop-table-contributor')
+  scope: workshopStorageAccountId
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '76199698-9eea-4c19-bc07-45e0e9d74c54') // Storage Table Data Contributor
+    principalId: functionApp.identity.principalId
+    principalType: 'ServicePrincipal'
   }
 }
 
