@@ -133,7 +133,7 @@ resource funcStorageTableContributor 'Microsoft.Authorization/roleAssignments@20
   name: guid(funcStorage.id, functionApp.id, 'table-contributor')
   scope: funcStorage
   properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '76199698-9eea-4c19-bc07-45e0e9d74c54') // Storage Table Data Contributor
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3') // Storage Table Data Contributor
     principalId: functionApp.identity.principalId
     principalType: 'ServicePrincipal'
   }
@@ -149,7 +149,7 @@ resource workshopStorageTableContributor 'Microsoft.Authorization/roleAssignment
   name: guid(workshopStorageAccountId, functionApp.id, 'workshop-table-contributor')
   scope: workshopStorage
   properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '76199698-9eea-4c19-bc07-45e0e9d74c54') // Storage Table Data Contributor
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3') // Storage Table Data Contributor
     principalId: functionApp.identity.principalId
     principalType: 'ServicePrincipal'
   }
