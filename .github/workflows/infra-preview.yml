@@ -21,6 +21,7 @@ jobs:
   what-if:
     name: Bicep What-If
     runs-on: ubuntu-latest
+    environment: ${{ github.base_ref == 'main' && 'prod' || 'dev' }}
     env:
       PARAM_FILE: ${{ github.base_ref == 'main' && 'prod' || 'dev' }}
     steps:
