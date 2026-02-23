@@ -24,6 +24,8 @@ jobs:
     environment: ${{ inputs.environment }}
     env:
       FUNCTION_APP_NAME: func-workshop-cleanup-${{ inputs.environment }}
+      RESOURCE_GROUP: rg-workshop-portal-${{ inputs.environment }}
+      FUNCTION_STORAGE_ACCOUNT: stfuncws${{ inputs.environment }}
     steps:
       - uses: actions/checkout@v4
 
@@ -49,10 +51,46 @@ jobs:
           cd function
           zip -r ../function.zip . -x "__pycache__/*" "*.pyc"
 
-      - name: Deploy via Azure CLI
+      - name: Deploy via remote package URL
+        shell: bash
         run: |
-          RESOURCE_GROUP="rg-workshop-portal-${{ inputs.environment }}"
-          az functionapp deployment source config-zip \
+          set -euo pipefail
+
+          CONTAINER_NAME="function-releases"
+          PACKAGE_NAME="function-${{ github.sha }}.zip"
+
+          az storage container create \
+            --name "$CONTAINER_NAME" \
+            --account-name "$FUNCTION_STORAGE_ACCOUNT" \
+            --auth-mode login \
+            --fail-on-exist false
+
+          az storage blob upload \
+            --account-name "$FUNCTION_STORAGE_ACCOUNT" \
+            --container-name "$CONTAINER_NAME" \
+            --name "$PACKAGE_NAME" \
+            --file function.zip \
+            --auth-mode login \
+            --overwrite true
+
+          SAS_EXPIRY="$(date -u -d '+2 days' '+%Y-%m-%dT%H:%MZ')"
+          SAS_TOKEN="$(az storage blob generate-sas \
+            --account-name "$FUNCTION_STORAGE_ACCOUNT" \
+            --container-name "$CONTAINER_NAME" \
+            --name "$PACKAGE_NAME" \
+            --permissions r \
+            --expiry "$SAS_EXPIRY" \
+            --https-only \
+            --auth-mode login \
+            -o tsv)"
+
+          PACKAGE_URL="https://${FUNCTION_STORAGE_ACCOUNT}.blob.core.windows.net/${CONTAINER_NAME}/${PACKAGE_NAME}?${SAS_TOKEN}"
+
+          az functionapp config appsettings set \
             --name "$FUNCTION_APP_NAME" \
             --resource-group "$RESOURCE_GROUP" \
-            --src function.zip
+            --settings WEBSITE_RUN_FROM_PACKAGE="$PACKAGE_URL"
+
+          az functionapp restart \
+            --name "$FUNCTION_APP_NAME" \
+            --resource-group "$RESOURCE_GROUP"
