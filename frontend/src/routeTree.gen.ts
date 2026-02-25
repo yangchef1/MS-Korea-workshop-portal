@@ -81,8 +81,8 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_layout': typeof LayoutRouteWithChildren
   '/login': typeof LoginRoute
-  '/_layout/templates': typeof LayoutTemplatesRoute
   '/_layout/subscriptions': typeof LayoutSubscriptionsRoute
+  '/_layout/templates': typeof LayoutTemplatesRoute
   '/_layout/users': typeof LayoutUsersRoute
   '/_layout/': typeof LayoutIndexRoute
   '/_layout/workshops/$workshopId': typeof LayoutWorkshopsWorkshopIdRoute
@@ -93,6 +93,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/login'
+    | '/subscriptions'
     | '/templates'
     | '/users'
     | '/workshops/$workshopId'
@@ -153,18 +154,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutUsersRouteImport
       parentRoute: typeof LayoutRoute
     }
-    '/_layout/subscriptions': {
-      id: '/_layout/subscriptions'
-      path: '/subscriptions'
-      fullPath: '/subscriptions'
-      preLoaderRoute: typeof LayoutSubscriptionsRouteImport
-      parentRoute: typeof LayoutRoute
-    }
     '/_layout/templates': {
       id: '/_layout/templates'
       path: '/templates'
       fullPath: '/templates'
       preLoaderRoute: typeof LayoutTemplatesRouteImport
+      parentRoute: typeof LayoutRoute
+    }
+    '/_layout/subscriptions': {
+      id: '/_layout/subscriptions'
+      path: '/subscriptions'
+      fullPath: '/subscriptions'
+      preLoaderRoute: typeof LayoutSubscriptionsRouteImport
       parentRoute: typeof LayoutRoute
     }
     '/_layout/workshops/create': {
@@ -185,8 +186,8 @@ declare module '@tanstack/react-router' {
 }
 
 interface LayoutRouteChildren {
-  LayoutTemplatesRoute: typeof LayoutTemplatesRoute
   LayoutSubscriptionsRoute: typeof LayoutSubscriptionsRoute
+  LayoutTemplatesRoute: typeof LayoutTemplatesRoute
   LayoutUsersRoute: typeof LayoutUsersRoute
   LayoutIndexRoute: typeof LayoutIndexRoute
   LayoutWorkshopsWorkshopIdRoute: typeof LayoutWorkshopsWorkshopIdRoute
@@ -194,8 +195,8 @@ interface LayoutRouteChildren {
 }
 
 const LayoutRouteChildren: LayoutRouteChildren = {
-  LayoutTemplatesRoute: LayoutTemplatesRoute,
   LayoutSubscriptionsRoute: LayoutSubscriptionsRoute,
+  LayoutTemplatesRoute: LayoutTemplatesRoute,
   LayoutUsersRoute: LayoutUsersRoute,
   LayoutIndexRoute: LayoutIndexRoute,
   LayoutWorkshopsWorkshopIdRoute: LayoutWorkshopsWorkshopIdRoute,
