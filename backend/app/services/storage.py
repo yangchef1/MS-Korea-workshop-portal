@@ -429,15 +429,14 @@ class StorageService:
             raise
 
     # ------------------------------------------------------------------
-    # Portal settings (subscriptions allow/deny)
+    # Portal settings (subscription in-use tracking)
     # ------------------------------------------------------------------
 
-    async def get_portal_subscription_settings(self) -> dict[str, Any]:
-        """구독 허용/제외 및 사용 중 설정을 조회한다.
+    async def get_in_use_map(self) -> dict[str, str]:
+        """현재 사용 중인 구독 매핑을 조회한다.
 
         Returns:
-            allow_list, deny_list, in_use_map을 포함하는 딕셔너리.
-            설정이 없으면 빈 값을 반환한다.
+            구독 ID → 워크샵 ID 매핑. 설정이 없으면 빈 딕셔너리.
         """
         await self._ensure_tables_exist()
 
@@ -447,58 +446,11 @@ class StorageService:
                 partition_key=PORTAL_SETTINGS_PARTITION_KEY,
                 row_key=PORTAL_SETTINGS_ROW_KEY_SUBSCRIPTIONS,
             )
-            return {
-                "allow_list": json.loads(entity.get("allow_list_json", "[]")),
-                "deny_list": json.loads(entity.get("deny_list_json", "[]")),
-                "in_use_map": json.loads(entity.get("in_use_map_json", "{}")),
-            }
+            return json.loads(entity.get("in_use_map_json", "{}"))
         except ResourceNotFoundError:
-            return {"allow_list": [], "deny_list": [], "in_use_map": {}}
+            return {}
         except Exception as e:
-            logger.error("Failed to get portal subscription settings: %s", e)
-            raise
-
-    async def save_portal_subscription_settings(
-        self,
-        allow_list: list[str],
-        deny_list: list[str],
-        in_use_map: dict[str, str] | None = None,
-    ) -> dict[str, Any]:
-        """구독 허용/제외 및 사용 중 설정을 저장한다.
-
-        Args:
-            allow_list: 허용 구독 ID 목록(빈 리스트면 전체 허용).
-            deny_list: 제외 구독 ID 목록.
-            in_use_map: 구독 ID → 워크샵 ID 매핑. None이면 기존 값 유지.
-
-        Returns:
-            저장된 설정 딕셔너리.
-        """
-        await self._ensure_tables_exist()
-
-        try:
-            table_client = self.table_service_client.get_table_client(PORTAL_SETTINGS_TABLE)
-
-            # in_use_map이 None이면 기존 값을 유지하기 위해 먼저 조회
-            if in_use_map is None:
-                current = await self.get_portal_subscription_settings()
-                in_use_map = current.get("in_use_map", {})
-
-            entity = {
-                "PartitionKey": PORTAL_SETTINGS_PARTITION_KEY,
-                "RowKey": PORTAL_SETTINGS_ROW_KEY_SUBSCRIPTIONS,
-                "allow_list_json": json.dumps(allow_list),
-                "deny_list_json": json.dumps(deny_list),
-                "in_use_map_json": json.dumps(in_use_map),
-            }
-            await table_client.upsert_entity(entity)
-            logger.info(
-                "Saved portal subscription settings (allow=%d, deny=%d, in_use=%d)",
-                len(allow_list), len(deny_list), len(in_use_map),
-            )
-            return {"allow_list": allow_list, "deny_list": deny_list, "in_use_map": in_use_map}
-        except Exception as e:
-            logger.error("Failed to save portal subscription settings: %s", e)
+            logger.error("Failed to get in_use_map: %s", e)
             raise
 
     async def acquire_subscriptions(
@@ -533,8 +485,6 @@ class StorageService:
                     entity = {
                         "PartitionKey": PORTAL_SETTINGS_PARTITION_KEY,
                         "RowKey": PORTAL_SETTINGS_ROW_KEY_SUBSCRIPTIONS,
-                        "allow_list_json": "[]",
-                        "deny_list_json": "[]",
                         "in_use_map_json": "{}",
                     }
                     await table_client.upsert_entity(entity)

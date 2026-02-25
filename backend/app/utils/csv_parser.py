@@ -14,11 +14,6 @@ from app.exceptions import (
 
 logger = logging.getLogger(__name__)
 
-UUID_PATTERN = re.compile(
-    r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
-    re.IGNORECASE,
-)
-
 
 def extract_alias_from_email(email: str) -> str:
     """이메일 주소에서 alias를 추출한다.
@@ -48,30 +43,23 @@ def validate_email(email: str) -> bool:
 async def parse_participants_csv(file: UploadFile) -> list[dict[str, str]]:
     """업로드된 CSV 파일에서 참가자 목록을 파싱한다.
 
-    단일 컬럼(이메일만) 또는 2컬럼(이메일, subscription_id) CSV를 지원한다.
+    이메일만 포함하는 단일 컬럼 CSV를 지원한다.
     헤더가 있는 경우와 없는 경우 모두 처리 가능하다.
 
-    Supported CSV formats::
+    Supported CSV format::
 
-        # 1-column (email only) — subscription auto-assigned later
         email
         johndoe@company.com
-
-        # 2-column (email, subscription_id)
-        email,subscription_id
-        johndoe@company.com,00000000-0000-0000-0000-000000000000
 
     Args:
         file: 업로드된 CSV 파일.
 
     Returns:
-        'alias', 'email', 'subscription_id' 키를 가진 참가자 딕셔너리 리스트.
-        subscription_id가 없으면 빈 문자열로 반환하며, 후속 구독 배정 단계에서 채운다.
+        'alias', 'email' 키를 가진 참가자 딕셔너리 리스트.
 
     Raises:
         UnsupportedFileTypeError: CSV 파일이 아닌 경우.
         InvalidFormatError: 데이터 형식이 유효하지 않은 경우.
-        InvalidSubscriptionError: subscription_id가 허용 목록에 없는 경우.
         CSVParsingError: CSV 파싱에 실패한 경우.
     """
     if not file.filename.endswith('.csv'):
@@ -102,8 +90,8 @@ async def parse_participants_csv(file: UploadFile) -> list[dict[str, str]]:
                 "CSV file is empty or contains no valid participants"
             )
 
-        # Detect column format from header or first data row
-        has_two_columns, start_index = _detect_csv_format(lines)
+        # Detect header row
+        start_index = _detect_start_index(lines)
 
         participants = []
 
@@ -134,14 +122,9 @@ async def parse_participants_csv(file: UploadFile) -> list[dict[str, str]]:
                     expected_format="alphanumeric with dots, hyphens, underscores"
                 )
 
-            subscription_id = _extract_subscription_id(
-                columns, has_two_columns, row_num
-            )
-
             participants.append({
                 'alias': alias,
                 'email': email.lower(),
-                'subscription_id': subscription_id,
             })
 
         if not participants:
@@ -159,51 +142,19 @@ async def parse_participants_csv(file: UploadFile) -> list[dict[str, str]]:
         raise CSVParsingError(f"CSV parsing error: {e}")
 
 
-def _detect_csv_format(lines: list[str]) -> tuple[bool, int]:
-    """Detect whether the CSV has 1 or 2 columns and whether a header row is present.
+def _detect_start_index(lines: list[str]) -> int:
+    """Detect whether the first line is a header row.
 
     Returns:
-        Tuple of (has_two_columns, start_index).
+        Start index (1 if header present, 0 otherwise).
     """
     first_line_lower = lines[0].lower().replace('"', '').replace("'", '').strip()
-    columns = [c.strip() for c in first_line_lower.split(',')]
+    first_col = first_line_lower.split(',')[0].strip()
 
-    # Check for known header patterns
-    if columns[0] == 'email':
-        has_two_columns = len(columns) >= 2 and columns[1] == 'subscription_id'
-        return has_two_columns, 1
+    if first_col == 'email':
+        return 1
 
-    # No header — detect from first data row
-    has_two_columns = len(columns) >= 2 and bool(UUID_PATTERN.match(columns[1]))
-    return has_two_columns, 0
-
-
-def _extract_subscription_id(
-    columns: list[str], has_two_columns: bool, row_num: int
-) -> str:
-    """Extract and validate subscription_id from a CSV row.
-
-    Args:
-        columns: Split CSV columns for the row.
-        has_two_columns: Whether the CSV has a subscription_id column.
-        row_num: Row number for error messages.
-
-    Returns:
-        subscription_id 문자열 (없으면 빈 문자열). UUID 형식만 검증하며, 허용 목록 검증은 후단 서비스에서 수행한다.
-    """
-    if not has_two_columns or len(columns) < 2 or not columns[1]:
-        return ""
-
-    sub_id = columns[1]
-
-    if not UUID_PATTERN.match(sub_id):
-        raise InvalidFormatError(
-            f"Invalid subscription ID format '{sub_id}' at row {row_num}",
-            field="subscription_id",
-            expected_format="UUID (e.g., 00000000-0000-0000-0000-000000000000)",
-        )
-
-    return sub_id
+    return 0
 
 
 def _validate_no_duplicates(participants: list[dict[str, str]]) -> None:
@@ -241,7 +192,7 @@ def generate_passwords_csv(participants: list[dict[str, str]]) -> str:
             'upn': participant['upn'],
             'password': participant['password'],
             'subscription_id': participant.get('subscription_id', ''),
-            'resource_group': participant.get('resource_group', '')
+            'resource_group': participant.get('resource_group', ''),
         })
 
     return output.getvalue()

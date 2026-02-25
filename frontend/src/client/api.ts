@@ -246,10 +246,7 @@ export interface InvalidParticipant {
 
 export interface SubscriptionSettingsResponse {
   subscriptions: SubscriptionInfo[]
-  allow_list: string[]
-  deny_list: string[]
   in_use_map?: Record<string, string>
-  pruned_ids?: string[]
   from_cache?: boolean
 }
 
@@ -552,17 +549,6 @@ export const subscriptionAdminApi = {
     const response = await apiClient.get<SubscriptionSettingsResponse>(
       "/admin/subscriptions",
       { params: { refresh } }
-    )
-    return response.data
-  },
-
-  update: async (
-    allow_list: string[],
-    deny_list: string[]
-  ): Promise<SubscriptionSettingsResponse> => {
-    const response = await apiClient.put<SubscriptionSettingsResponse>(
-      "/admin/subscriptions",
-      { allow_list, deny_list }
     )
     return response.data
   },
