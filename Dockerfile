@@ -10,6 +10,7 @@ WORKDIR /app
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    libicu-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Bicep standalone CLI for Bicep → ARM template compilation

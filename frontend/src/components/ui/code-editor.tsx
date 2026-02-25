@@ -24,9 +24,6 @@ function getLanguageExtension(templateType: TemplateType) {
       return json()
     case "bicep":
       return javascript()
-    case "terraform":
-      // HCL shares structural similarities with JS-like config languages
-      return javascript()
   }
 }
 
@@ -144,7 +141,7 @@ interface CodeEditorProps {
 /**
  * Syntax-highlighted code editor backed by CodeMirror 6.
  *
- * Supports JSON (ARM), JavaScript-like (Bicep), and HCL-like (Terraform)
+ * Supports JSON (ARM) and JavaScript-like (Bicep)
  * highlighting with dark/light theme awareness.
  */
 export function CodeEditor({
