@@ -1,4 +1,4 @@
-import { useRef, useEffect } from "react"
+import { useRef, useEffect, useState, useCallback } from "react"
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from "@codemirror/view"
 import { EditorState } from "@codemirror/state"
 import { defaultKeymap, indentWithTab } from "@codemirror/commands"
@@ -123,6 +123,28 @@ const lightEditorTheme = EditorView.theme(
   { dark: false }
 )
 
+/** Copies text to clipboard with a brief "copied" indicator. */
+function CopyButton({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false)
+
+  const handleCopy = useCallback(async () => {
+    await navigator.clipboard.writeText(value)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }, [value])
+
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      className="absolute top-2 right-2 z-10 rounded-md border border-input bg-background px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
+      title="코드 복사"
+    >
+      {copied ? "✓ 복사됨" : "복사"}
+    </button>
+  )
+}
+
 interface CodeEditorProps {
   /** Current code content. */
   value: string
@@ -141,7 +163,7 @@ interface CodeEditorProps {
 /**
  * Syntax-highlighted code editor backed by CodeMirror 6.
  *
- * Supports JSON (ARM) and JavaScript-like (Bicep)
+ * Supports JSON (ARM), JavaScript-like (Bicep), and HCL-like (Terraform)
  * highlighting with dark/light theme awareness.
  */
 export function CodeEditor({
@@ -225,10 +247,13 @@ export function CodeEditor({
   }, [value])
 
   return (
-    <div
-      ref={containerRef}
-      className="overflow-auto rounded-md border border-input text-sm"
-      style={{ minHeight, maxHeight }}
-    />
+    <div className="relative">
+      <CopyButton value={value} />
+      <div
+        ref={containerRef}
+        className="overflow-auto rounded-md border border-input text-sm"
+        style={{ minHeight, maxHeight }}
+      />
+    </div>
   )
 }
