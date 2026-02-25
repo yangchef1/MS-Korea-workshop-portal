@@ -492,6 +492,7 @@ class StorageService:
         description: str,
         template_content: str,
         template_type: str = "arm",
+        compiled_arm_content: str | None = None,
     ) -> dict[str, str]:
         """새 인프라 템플릿을 생성한다.
 
@@ -499,7 +500,8 @@ class StorageService:
             name: 템플릿 이름 (RowKey로 사용).
             description: 템플릿 설명.
             template_content: 템플릿 콘텐츠 문자열.
-            template_type: 템플릿 유형 (arm, bicep, terraform).
+            template_type: 템플릿 유형 (arm, bicep).
+            compiled_arm_content: Bicep 프리컴파일 ARM JSON 문자열.
 
         Returns:
             생성된 템플릿 정보 딕셔너리.
@@ -531,6 +533,9 @@ class StorageService:
             "template_type": template_type,
             "template_content": template_content,
         }
+        if compiled_arm_content:
+            entity["compiled_arm_content"] = compiled_arm_content
+
         await table_client.create_entity(entity)
         logger.info("Created template: %s (type=%s)", name, template_type)
 
@@ -568,13 +573,16 @@ class StorageService:
             raise
 
     async def get_template(self, template_name: str) -> dict[str, Any] | None:
-        """템플릿 콘텐츠를 조회한다.
+        """배포용 ARM 템플릿 JSON dict를 조회한다.
+
+        ARM 유형이면 template_content를 파싱하고,
+        Bicep 유형이면 프리컴파일된 compiled_arm_content를 반환한다.
 
         Args:
             template_name: 템플릿 파일명 (RowKey로 사용).
 
         Returns:
-            파싱된 템플릿 JSON. 존재하지 않으면 None.
+            파싱된 ARM 템플릿 JSON dict. 존재하지 않으면 None.
         """
 
         await self._ensure_tables_exist()
@@ -585,6 +593,18 @@ class StorageService:
                 partition_key=TEMPLATE_PARTITION_KEY,
                 row_key=template_name,
             )
+            template_type = entity.get("template_type", "arm")
+
+            if template_type == "bicep":
+                compiled = entity.get("compiled_arm_content")
+                if not compiled:
+                    logger.warning(
+                        "Bicep template '%s' has no compiled ARM content",
+                        template_name,
+                    )
+                    return None
+                return json.loads(compiled)
+
             return json.loads(entity.get("template_content", "{}"))
         except ResourceNotFoundError:
             logger.warning("Template not found: %s", template_name)
@@ -629,6 +649,7 @@ class StorageService:
         description: str | None = None,
         template_content: str | None = None,
         template_type: str | None = None,
+        compiled_arm_content: str | None = None,
     ) -> dict[str, str]:
         """기존 템플릿의 메타데이터 또는 콘텐츠를 업데이트한다.
 
@@ -637,6 +658,7 @@ class StorageService:
             description: 새 설명. None이면 변경하지 않음.
             template_content: 새 콘텐츠 문자열. None이면 변경하지 않음.
             template_type: 새 템플릿 유형. None이면 변경하지 않음.
+            compiled_arm_content: Bicep 프리컴파일 ARM JSON. None이면 변경하지 않음.
 
         Returns:
             업데이트된 템플릿 정보 딕셔너리.
@@ -666,6 +688,8 @@ class StorageService:
             entity["template_content"] = template_content
         if template_type is not None:
             entity["template_type"] = template_type
+        if compiled_arm_content is not None:
+            entity["compiled_arm_content"] = compiled_arm_content
 
         await table_client.update_entity(entity, mode="merge")
         logger.info("Updated template: %s", template_name)

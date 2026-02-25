@@ -67,7 +67,7 @@ function CreateWorkshop() {
     "westcentralus",   // West Central US - EUAP canary region
   ]
 
-  const { data: templates = [] } = useQuery({
+  const { data: templates = [], isLoading: isTemplatesLoading } = useQuery({
     queryKey: ["workshop-templates"],
     queryFn: workshopApi.getTemplates,
     enabled: isAuthenticated,
@@ -328,26 +328,36 @@ function CreateWorkshop() {
               </div>
             </div>
 
-            {templates && templates.length > 0 && (
-              <div className="space-y-2">
-                <Label htmlFor="infra_template">인프라 템플릿</Label>
-                <select
-                  id="infra_template"
-                  value={formData.infra_template}
-                  onChange={(e) =>
-                    setFormData({ ...formData, infra_template: e.target.value })
-                  }
-                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                >
-                  <option value="">선택 안 함</option>
-                  {templates.map((template) => (
-                    <option key={template.path} value={template.path}>
-                      {template.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
+            <div className="space-y-2">
+              <Label htmlFor="infra_template">인프라 템플릿</Label>
+              <select
+                id="infra_template"
+                value={formData.infra_template}
+                onChange={(e) =>
+                  setFormData({ ...formData, infra_template: e.target.value })
+                }
+                disabled={isTemplatesLoading || templates.length === 0}
+                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <option value="">
+                  {isTemplatesLoading
+                    ? "템플릿 불러오는 중..."
+                    : templates.length === 0
+                      ? "등록된 템플릿 없음"
+                      : "선택 안 함"}
+                </option>
+                {templates.map((template) => (
+                  <option key={template.path} value={template.path}>
+                    {template.name} [{(template.template_type ?? "arm").toUpperCase()}]
+                  </option>
+                ))}
+              </select>
+              {!isTemplatesLoading && templates.length === 0 && (
+                <p className="text-xs text-muted-foreground">
+                  템플릿 관리에서 템플릿을 먼저 등록하면 선택할 수 있습니다.
+                </p>
+              )}
+            </div>
 
             <div className="space-y-2">
               <Label htmlFor="survey_url">만족도 조사 URL (선택)</Label>

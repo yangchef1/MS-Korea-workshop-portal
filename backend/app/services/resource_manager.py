@@ -1,12 +1,16 @@
 """Azure Resource Manager 서비스 (비동기).
 
-리소스 그룹, RBAC, ARM 배포를 관리한다.
+리소스 그룹, RBAC, ARM/Bicep 배포를 관리한다.
 azure.mgmt.resource.aio / azure.mgmt.authorization.aio를 사용하여
 네이티브 비동기 I/O를 제공한다.
 """
 import asyncio
+import json
 import logging
+import os
 import re
+import shutil
+import tempfile
 import time
 import uuid
 from functools import lru_cache
@@ -515,3 +519,63 @@ def get_resource_manager_service() -> ResourceManagerService:
 
 
 resource_manager_service = get_resource_manager_service()
+
+
+async def compile_bicep_to_arm(bicep_content: str) -> str:
+    """Bicep 템플릿을 ARM JSON 문자열로 컴파일한다.
+
+    Bicep standalone CLI를 사용하여 Bicep 소스를
+    ARM 템플릿 JSON으로 변환한다.
+    템플릿 저장 시점에 호출되어 프리컴파일 결과를 저장한다.
+
+    Args:
+        bicep_content: Bicep 템플릿 소스 코드.
+
+    Returns:
+        컴파일된 ARM 템플릿 JSON 문자열.
+
+    Raises:
+        BicepCompilationError: 컴파일 실패 시.
+    """
+    from app.exceptions import BicepCompilationError
+
+    tmp_dir = tempfile.mkdtemp(prefix="bicep_")
+    bicep_file = os.path.join(tmp_dir, "template.bicep")
+    arm_file = os.path.join(tmp_dir, "template.json")
+
+    try:
+        with open(bicep_file, "w", encoding="utf-8") as f:
+            f.write(bicep_content)
+
+        process = await asyncio.create_subprocess_exec(
+            "bicep", "build", bicep_file,
+            "--outfile", arm_file,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await process.communicate()
+
+        if process.returncode != 0:
+            error_msg = stderr.decode("utf-8", errors="replace").strip()
+            raise BicepCompilationError(
+                f"Bicep compilation failed: {error_msg}"
+            )
+
+        with open(arm_file, "r", encoding="utf-8") as f:
+            arm_json = f.read()
+
+        # Validate the output is valid JSON
+        json.loads(arm_json)
+
+        logger.info("Successfully compiled Bicep to ARM template")
+        return arm_json
+
+    except BicepCompilationError:
+        raise
+    except Exception as e:
+        logger.error("Bicep compilation error: %s", e)
+        raise BicepCompilationError(
+            f"Unexpected error during Bicep compilation: {e}"
+        ) from e
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
