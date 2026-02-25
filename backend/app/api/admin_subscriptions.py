@@ -22,7 +22,7 @@ async def get_subscriptions(
     subscription_service=Depends(get_subscription_service),
     _: dict = Depends(require_admin),
 ):
-    """사용 가능한 구독 목록과 현재 설정을 조회한다."""
+    """사용 가능한 구독 목록과 현재 설정(in_use_map 포함)을 조회한다."""
     result = await subscription_service.get_available_subscriptions(
         force_refresh=refresh
     )

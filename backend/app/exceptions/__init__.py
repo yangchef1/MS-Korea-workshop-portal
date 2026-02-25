@@ -28,6 +28,7 @@ Exception Hierarchy:
     ├── ServiceError (502)
     │   └── AzureServiceError
     │       ├── AzureAuthenticationError (401)
+    │       ├── InsufficientSubscriptionsError (409)
     │       ├── PolicyServiceError
     │       │   ├── PolicyNotFoundError (404)
     │       │   ├── PolicyAssignmentError
@@ -83,6 +84,7 @@ from .azure import (
     UserCreationError,
     UserNotFoundError,
     UserDeletionError,
+    InsufficientSubscriptionsError,
     CostServiceError,
     CostQueryError,
 )
@@ -127,6 +129,7 @@ __all__ = [
     "UserCreationError",
     "UserNotFoundError",
     "UserDeletionError",
+    "InsufficientSubscriptionsError",
     "CostServiceError",
     "CostQueryError",
     "CSVParsingError",

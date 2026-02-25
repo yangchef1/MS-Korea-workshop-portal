@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router"
 import { useEffect, useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { RefreshCw, ShieldCheck, ShieldOff, Save } from "lucide-react"
+import { RefreshCw, ShieldCheck, ShieldOff, Save, Lock } from "lucide-react"
 
 import { subscriptionAdminApi, type SubscriptionSettingsResponse } from "@/client"
 import { Button } from "@/components/ui/button"
@@ -40,6 +40,7 @@ function SubscriptionAdminPage() {
   }, [data])
 
   const availableSubs = useMemo(() => data?.subscriptions || [], [data])
+  const inUseMap: Record<string, string> = useMemo(() => data?.in_use_map || {}, [data])
 
   const refreshMutation = useMutation({
     mutationFn: () => subscriptionAdminApi.get(true),
@@ -169,14 +170,21 @@ function SubscriptionAdminPage() {
             availableSubs.map((sub) => {
               const inAllow = allowSet.has(sub.subscription_id)
               const inDeny = denySet.has(sub.subscription_id)
+              const usedByWorkshop = inUseMap[sub.subscription_id]
               return (
                 <div
                   key={sub.subscription_id}
                   className="flex items-center justify-between border rounded-lg p-3"
                 >
                   <div>
-                    <div className="font-medium">
+                    <div className="font-medium flex items-center gap-2">
                       {sub.display_name || sub.subscription_id}
+                      {usedByWorkshop && (
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
+                          <Lock className="h-3 w-3" />
+                          사용 중: {usedByWorkshop}
+                        </span>
+                      )}
                     </div>
                     <div className="text-xs text-muted-foreground">
                       {sub.subscription_id}

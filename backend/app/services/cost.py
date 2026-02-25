@@ -172,22 +172,115 @@ class CostService:
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
     ) -> dict:
-        """워크샵 전체 참가자의 비용 합계를 조회한다.
+        """워크샵 전체 참가자의 비용 합계를 조회한다 (구독 레벨).
+
+        각 참가자의 전용 구독에 대해 비용을 조회하고 합산한다.
 
         Args:
-            participants: 'resource_group'과 선택적 'subscription_id'를 가진 딕셔너리 리스트.
-                하위 호환을 위해 문자열 리스트(리소스 그룹 이름)도 허용.
+            participants: 'subscription_id'를 가진 딕셔너리 리스트.
+                하위 호환을 위해 'resource_group' 기반 스펙도 허용.
             days: 기본 조회 일수 (날짜가 지정되면 무시).
             start_date: ISO 형식 시작일 (선택).
             end_date: ISO 형식 종료일 (선택).
 
         Returns:
-            총 비용과 리소스 그룹별 내역을 포함한 딕셔너리.
+            총 비용과 구독별 내역을 포함한 딕셔너리.
         """
         # 하위 호환: 문자열 리스트를 딕셔너리 리스트로 변환
         if participants and isinstance(participants[0], str):
             participants = [{"resource_group": rg} for rg in participants]
 
+        # resource_group 기반 스펙인 경우 기존 RG 비용 조회로 폴백
+        has_rg_only = any(
+            p.get("resource_group") and not p.get("subscription_id")
+            for p in participants
+        )
+        if has_rg_only:
+            return await self._get_workshop_cost_by_rg(
+                participants, days, start_date, end_date,
+            )
+
+        # 구독 레벨 비용 조회 — 구독 ID 중복 제거
+        seen_subs: dict[str, dict] = {}
+        for p in participants:
+            sub_id = p.get("subscription_id")
+            if sub_id and sub_id not in seen_subs:
+                seen_subs[sub_id] = p
+
+        start_dt, end_dt, period_days = _parse_date_range(start_date, end_date, days)
+
+        tasks = [
+            self._get_subscription_cost_with_dates(sub_id, start_dt, end_dt)
+            for sub_id in seen_subs
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        total_cost = 0.0
+        currency = _DEFAULT_CURRENCY
+        breakdown = []
+
+        for sub_id, result in zip(seen_subs, results):
+            if isinstance(result, Exception):
+                logger.error(
+                    "Failed to get cost for subscription %s: %s", sub_id, result,
+                )
+                breakdown.append({
+                    "subscription_id": sub_id,
+                    "cost": 0.0,
+                    "error": str(result),
+                })
+            else:
+                total_cost += result["total_cost"]
+                currency = result.get("currency", _DEFAULT_CURRENCY)
+                breakdown.append({
+                    "subscription_id": sub_id,
+                    "cost": result["total_cost"],
+                })
+
+        return {
+            "total_cost": round(total_cost, 2),
+            "currency": currency,
+            "period_days": period_days,
+            "subscriptions_count": len(seen_subs),
+            "breakdown": breakdown,
+        }
+
+    async def _get_subscription_cost_with_dates(
+        self,
+        subscription_id: str,
+        start_date: datetime,
+        end_date: datetime,
+    ) -> dict:
+        """날짜 범위를 지정하여 구독 비용을 조회한다."""
+        try:
+            scope = f"/subscriptions/{subscription_id}"
+            query = _build_cost_query(start_date, end_date)
+            result = self._get_cost_client().query.usage(
+                scope=scope, parameters=query,
+            )
+            total_cost, currency = _sum_cost_rows(result)
+            return {
+                "subscription_id": subscription_id,
+                "total_cost": total_cost,
+                "currency": currency,
+            }
+        except Exception as e:
+            logger.error("Failed to query cost for subscription %s: %s", subscription_id, e)
+            return {
+                "subscription_id": subscription_id,
+                "total_cost": 0.0,
+                "currency": _DEFAULT_CURRENCY,
+                "error": str(e),
+            }
+
+    async def _get_workshop_cost_by_rg(
+        self,
+        participants: list[dict],
+        days: int,
+        start_date: Optional[str],
+        end_date: Optional[str],
+    ) -> dict:
+        """하위 호환: 리소스 그룹 기반 비용 조회 (기존 워크샵 지원)."""
         tasks = [
             self.get_resource_group_cost(
                 p.get("resource_group"),

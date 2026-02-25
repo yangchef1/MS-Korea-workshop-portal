@@ -446,6 +446,49 @@ class ResourceManagerService:
             logger.error("Failed to list resources in %s: %s", resource_group_name, e)
             return []
 
+    async def list_resource_groups(
+        self,
+        subscription_id: str | None = None,
+        tag_filter: dict[str, str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """구독 내 리소스 그룹 목록을 조회한다.
+
+        Args:
+            subscription_id: 대상 구독 ID. 미지정 시 기본 구독 사용.
+            tag_filter: 태그 필터. 지정 시 해당 태그를 가진 RG만 반환.
+
+        Returns:
+            리소스 그룹 목록.
+        """
+        try:
+            resource_client = self._get_resource_client(subscription_id)
+            rgs = []
+            async for rg in resource_client.resource_groups.list():
+                if tag_filter and rg.tags:
+                    if not all(
+                        rg.tags.get(k) == v for k, v in tag_filter.items()
+                    ):
+                        continue
+                elif tag_filter:
+                    continue
+
+                rgs.append({
+                    "name": rg.name,
+                    "location": rg.location,
+                    "id": rg.id,
+                    "tags": rg.tags or {},
+                    "subscription_id": subscription_id or self._default_subscription_id,
+                })
+
+            return rgs
+
+        except Exception as e:
+            logger.error(
+                "Failed to list resource groups (subscription: %s): %s",
+                subscription_id or "default", e,
+            )
+            return []
+
     async def get_resource_types(
         self, namespaces: list[str] | None = None,
     ) -> list[dict[str, str]]:

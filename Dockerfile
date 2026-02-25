@@ -7,7 +7,7 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies (libicu is required by Bicep CLI)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     libicu-dev \

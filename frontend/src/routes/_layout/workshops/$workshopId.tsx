@@ -245,7 +245,9 @@ function CostBreakdownRow({ item }: { item: CostBreakdown }) {
           <DollarSign className="h-4 w-4 text-primary" />
         </div>
         <div className="flex flex-col gap-1">
-          <div className="font-medium">{item.resource_group}</div>
+          <div className="font-medium text-xs text-muted-foreground truncate max-w-[300px]">
+            {item.subscription_id}
+          </div>
           {item.error && (
             <div className="text-xs text-yellow-600 flex items-center gap-1">
               <AlertCircle className="h-3 w-3" />
@@ -307,7 +309,7 @@ function CostAnalysis({ workshopId, refetch, isRefetching }: { workshopId: strin
         {data?.breakdown && data.breakdown.length > 0 ? (
           <div className="space-y-2">
             {data.breakdown.map((item) => (
-              <CostBreakdownRow key={item.resource_group} item={item} />
+              <CostBreakdownRow key={item.subscription_id} item={item} />
             ))}
           </div>
         ) : (
