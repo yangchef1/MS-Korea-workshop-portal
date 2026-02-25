@@ -45,16 +45,16 @@ class PolicyService:
 
     Attributes:
         ALLOWED_LOCATIONS_POLICY_ID: 허용 지역 정책 정의 ID.
-        ALLOWED_RESOURCE_TYPES_POLICY_ID: 허용 리소스 타입 정책 정의 ID.
+        DENIED_RESOURCE_TYPES_POLICY_ID: 차단 리소스 타입 정책 정의 ID.
     """
 
     ALLOWED_LOCATIONS_POLICY_ID = (
         "/providers/Microsoft.Authorization/policyDefinitions/"
         "e56962a6-4747-49cd-b67b-bf8b01975c4c"
     )
-    ALLOWED_RESOURCE_TYPES_POLICY_ID = (
+    DENIED_RESOURCE_TYPES_POLICY_ID = (
         "/providers/Microsoft.Authorization/policyDefinitions/"
-        "a08ec900-254a-4555-9bf5-e42af04b5c5c"
+        "6c112d4e-5bc7-47ae-a041-ea2d9dccd749"
     )
 
     def __init__(self) -> None:
@@ -206,61 +206,63 @@ class PolicyService:
         result["allowed_locations"] = allowed_locations
         return result
 
-    async def assign_resource_types_policy(
+    async def assign_denied_resource_types_policy(
         self,
         scope: str,
-        allowed_resource_types: list[str],
+        denied_resource_types: list[str],
         assignment_name: str | None = None,
         subscription_id: str | None = None,
     ) -> dict[str, Any]:
-        """허용 리소스 타입 정책을 특정 범위에 할당한다.
+        """차단 리소스 타입 정책을 특정 범위에 할당한다.
+
+        블랙리스트 방식으로, 지정된 리소스 타입의 배포를 거부한다.
 
         Args:
             scope: 리소스 범위.
-            allowed_resource_types: 허용 리소스 타입 목록
+            denied_resource_types: 차단할 리소스 타입 목록
                 (예: ['Microsoft.Compute/virtualMachines']).
             assignment_name: 정책 할당 이름. 미지정 시 자동 생성.
             subscription_id: 대상 구독 ID. 미지정 시 기본 구독 사용.
 
         Returns:
-            정책 할당 결과 (id, name, scope, allowed_resource_types).
+            정책 할당 결과 (id, name, scope, denied_resource_types).
 
         Raises:
             PolicyAssignmentError: 할당 실패 시.
             AzureAuthenticationError: 인증 실패 시.
         """
-        if not allowed_resource_types:
-            logger.warning("No resource types provided, skipping policy assignment")
-            return {"skipped": True, "reason": "No resource types provided"}
+        if not denied_resource_types:
+            logger.warning("No denied resource types provided, skipping policy assignment")
+            return {"skipped": True, "reason": "No denied resource types provided"}
 
         if not assignment_name:
-            assignment_name = f"allowed-resources-{uuid.uuid4().hex[:8]}"
+            assignment_name = f"denied-resources-{uuid.uuid4().hex[:8]}"
 
-        type_count = len(allowed_resource_types)
+        type_count = len(denied_resource_types)
         assignment = PolicyAssignment(
-            display_name=f"Allowed Resource Types ({type_count} types)",
-            policy_definition_id=self.ALLOWED_RESOURCE_TYPES_POLICY_ID,
-            parameters={"listOfResourceTypesAllowed": {"value": allowed_resource_types}},
-            description=f"Restricts deployment to {type_count} allowed resource types",
+            display_name=f"Not Allowed Resource Types ({type_count} types)",
+            policy_definition_id=self.DENIED_RESOURCE_TYPES_POLICY_ID,
+            parameters={"listOfResourceTypesNotAllowed": {"value": denied_resource_types}},
+            description=f"Denies deployment of {type_count} resource types",
         )
 
         result = await self._create_assignment(
-            scope, assignment_name, assignment, "resource types", subscription_id
+            scope, assignment_name, assignment, "denied resource types", subscription_id
         )
         logger.info(
-            "Assigned resource types policy to %s with %d types", scope, type_count
+            "Assigned denied resource types policy to %s with %d types", scope, type_count
         )
-        result["allowed_resource_types"] = allowed_resource_types
+        result["denied_resource_types"] = denied_resource_types
         return result
 
     async def assign_workshop_policies(
         self,
         scope: str,
         allowed_locations: list[str],
-        allowed_resource_types: list[str],
+        denied_resource_types: list[str],
         subscription_id: str | None = None,
     ) -> dict[str, Any]:
-        """워크샵 정책(지역 + 리소스 타입)을 한 번에 할당한다.
+        """워크샵 정책(지역 허용 + 리소스 타입 차단)을 한 번에 할당한다.
 
         두 정책 할당을 병렬로 실행하며, 부분 실패는 예외를 발생시키지 않고
         결과에 None으로 표시한다.
@@ -268,7 +270,7 @@ class PolicyService:
         Args:
             scope: 리소스 범위.
             allowed_locations: 허용 Azure 리전 목록.
-            allowed_resource_types: 허용 리소스 타입 목록.
+            denied_resource_types: 차단할 리소스 타입 목록.
             subscription_id: 대상 구독 ID. 미지정 시 기본 구독 사용.
 
         Returns:
@@ -276,10 +278,14 @@ class PolicyService:
         """
         tasks = [
             self.assign_location_policy(
-                scope, allowed_locations, subscription_id=subscription_id
+                scope, allowed_locations,
+                assignment_name="workshop-allowed-locations",
+                subscription_id=subscription_id,
             ),
-            self.assign_resource_types_policy(
-                scope, allowed_resource_types, subscription_id=subscription_id
+            self.assign_denied_resource_types_policy(
+                scope, denied_resource_types,
+                assignment_name="workshop-denied-resources",
+                subscription_id=subscription_id,
             ),
         ]
 

@@ -248,6 +248,7 @@ export interface SubscriptionSettingsResponse {
   subscriptions: SubscriptionInfo[]
   allow_list: string[]
   deny_list: string[]
+  in_use_map?: Record<string, string>
   pruned_ids?: string[]
   from_cache?: boolean
 }
@@ -256,7 +257,7 @@ export interface Participant {
   alias?: string
   name?: string
   email: string
-  resource_group: string
+  resource_group?: string
   user_principal_name?: string
   subscription_id?: string
 }
@@ -269,7 +270,7 @@ export interface Workshop {
   region?: string
   policy?: {
     allowed_regions: string[]
-    allowed_services: string[]
+    denied_services: string[]
   }
   start_date: string
   end_date: string
@@ -299,7 +300,7 @@ export interface WorkshopResources {
 }
 
 export interface CostBreakdown {
-  resource_group: string
+  subscription_id: string
   cost: number
   error?: string
 }
@@ -382,7 +383,7 @@ export interface CreateWorkshopRequest {
   end_date: string
   base_resources_template: string
   allowed_regions: string  // comma-separated
-  allowed_services: string  // comma-separated
+  denied_services: string  // comma-separated
   participants_file: File
   survey_url?: string
 }
@@ -428,7 +429,7 @@ export const workshopApi = {
     formData.append("end_date", data.end_date)
     formData.append("base_resources_template", data.base_resources_template)
     formData.append("allowed_regions", data.allowed_regions)
-    formData.append("allowed_services", data.allowed_services)
+    formData.append("denied_services", data.denied_services)
     formData.append("participants_file", data.participants_file)
     if (data.survey_url) {
       formData.append("survey_url", data.survey_url)

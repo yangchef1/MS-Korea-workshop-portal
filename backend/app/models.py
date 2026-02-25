@@ -47,7 +47,7 @@ class ParticipantResponse(BaseModel):
     upn: str
     password: str
     subscription_id: str
-    resource_group: str
+    resource_group: str = ""
     object_id: str
 
 
@@ -55,7 +55,7 @@ class PolicySettings(BaseModel):
     """Azure Policy 구성."""
 
     allowed_regions: list[str] = Field(..., min_length=1)
-    allowed_services: list[str] = Field(..., min_length=1)
+    denied_services: list[str] = Field(default_factory=list)
 
 
 class WorkshopCreate(BaseModel):
@@ -102,7 +102,7 @@ class ParticipantData(BaseModel):
     upn: str
     password: str
     subscription_id: str = ""  # Default empty for backward compatibility; service layer falls back to default sub
-    resource_group: str
+    resource_group: str = ""  # Optional: only populated when a per-participant RG is created
     object_id: str
 
 
@@ -124,7 +124,7 @@ class PolicyData(BaseModel):
     """워크샵 메타데이터에 저장되는 정책 데이터."""
 
     allowed_regions: list[str] = Field(..., min_length=1)
-    allowed_services: list[str] = Field(..., min_length=1)
+    denied_services: list[str] = Field(default_factory=list)
 
 
 WORKSHOP_VALID_STATUSES = {"active", "completed", "deleted", "failed"}
@@ -141,7 +141,7 @@ class WorkshopCreateInput(BaseModel):
     start_date: str = Field(..., min_length=1)
     end_date: str = Field(..., min_length=1)
     allowed_regions: list[str] = Field(..., min_length=1)
-    allowed_services: list[str] = Field(..., min_length=1)
+    denied_services: list[str] = Field(default_factory=list)
 
 
 class WorkshopMetadata(BaseModel):

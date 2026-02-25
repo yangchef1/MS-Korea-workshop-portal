@@ -11,6 +11,9 @@ from datetime import datetime, timezone
 from azure.identity import DefaultAzureCredential
 from azure.data.tables import TableServiceClient
 from azure.mgmt.resource import ResourceManagementClient
+from azure.mgmt.resource.policy import PolicyClient
+from azure.core.exceptions import HttpResponseError
+from azure.core import MatchConditions
 from msgraph import GraphServiceClient
 import os
 
@@ -44,8 +47,11 @@ def get_resource_client(
 WORKSHOPS_TABLE = "workshops"
 PASSWORDS_TABLE = "passwords"
 DELETION_FAILURES_TABLE = "deletionfailures"
+PORTAL_SETTINGS_TABLE = "portalsettings"
 WORKSHOP_PARTITION_KEY = "workshop"
 PASSWORD_PARTITION_KEY = "password"
+PORTAL_SETTINGS_PARTITION_KEY = "config"
+PORTAL_SETTINGS_ROW_KEY_SUBSCRIPTIONS = "subscriptions"
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +133,24 @@ async def workshop_cleanup(timer: func.TimerRequest) -> None:
             )
             cleanup_results.append(result)
 
+        # Release subscriptions for successfully cleaned up workshops
+        settings_table = table_service_client.get_table_client(PORTAL_SETTINGS_TABLE)
+        subs_to_release: list[str] = []
+        for result in cleanup_results:
+            if result['success']:
+                workshop = next(
+                    (w for w in workshops_to_cleanup if w['id'] == result['workshop_id']),
+                    None,
+                )
+                if workshop:
+                    for p in workshop.get('participants', []):
+                        sub_id = p.get('subscription_id')
+                        if sub_id:
+                            subs_to_release.append(sub_id)
+
+        if subs_to_release:
+            _release_subscriptions_sync(settings_table, subs_to_release)
+
         successful = len([r for r in cleanup_results if r['success']])
         logger.info(f"Cleanup completed: {successful}/{len(cleanup_results)} workshops cleaned up successfully")
 
@@ -181,6 +205,33 @@ async def cleanup_workshop(
             for p in participants
             if p.get('resource_group')
         }
+
+        # Step 0: Remove subscription-level policies
+        seen_subs: set[str] = set()
+        for p in participants:
+            sub_id = p.get('subscription_id')
+            if sub_id and sub_id not in seen_subs:
+                seen_subs.add(sub_id)
+                sub_scope = f"/subscriptions/{sub_id}"
+                try:
+                    policy_client = PolicyClient(credential=credential, subscription_id=sub_id)
+                    try:
+                        policy_client.policy_assignments.delete(
+                            scope=sub_scope,
+                            policy_assignment_name="workshop-allowed-locations",
+                        )
+                    except Exception:
+                        pass
+                    try:
+                        policy_client.policy_assignments.delete(
+                            scope=sub_scope,
+                            policy_assignment_name="workshop-denied-resources",
+                        )
+                    except Exception:
+                        pass
+                    logger.info(f"Removed policies from subscription {sub_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to remove policies from {sub_id}: {e}")
 
         rg_names = [p.get('resource_group') for p in participants if p.get('resource_group')]
         if rg_names:
@@ -339,3 +390,57 @@ async def delete_user(graph_client: GraphServiceClient, upn: str) -> bool:
     except Exception as e:
         logger.error(f"Failed to delete user {upn}: {e}")
         raise
+
+
+_RELEASE_MAX_RETRIES = 3
+
+
+def _release_subscriptions_sync(
+    settings_table, subscription_ids: list[str],
+) -> None:
+    """Release subscriptions from in_use_map (sync, ETag-based).
+
+    Used by the Azure Function cleanup process which runs synchronous
+    Table Storage operations.
+
+    Args:
+        settings_table: Table client for portalsettings table.
+        subscription_ids: Subscription IDs to release.
+    """
+    if not subscription_ids:
+        return
+
+    for attempt in range(_RELEASE_MAX_RETRIES):
+        try:
+            try:
+                entity = settings_table.get_entity(
+                    partition_key=PORTAL_SETTINGS_PARTITION_KEY,
+                    row_key=PORTAL_SETTINGS_ROW_KEY_SUBSCRIPTIONS,
+                )
+                etag = entity.metadata["etag"]
+            except Exception:
+                return  # Nothing to release
+
+            in_use_map = json.loads(entity.get("in_use_map_json", "{}"))
+
+            for sid in subscription_ids:
+                in_use_map.pop(sid, None)
+
+            entity["in_use_map_json"] = json.dumps(in_use_map)
+            settings_table.update_entity(
+                entity,
+                mode="replace",
+                etag=etag,
+                match_condition=MatchConditions.IfNotModified,
+            )
+            logger.info(f"Released {len(subscription_ids)} subscriptions")
+            return
+
+        except HttpResponseError as e:
+            if e.status_code == 412 and attempt < _RELEASE_MAX_RETRIES - 1:
+                logger.warning(
+                    f"ETag conflict on release (attempt {attempt + 1}/{_RELEASE_MAX_RETRIES}), retrying"
+                )
+                continue
+            logger.error(f"Failed to release subscriptions: {e}")
+            return

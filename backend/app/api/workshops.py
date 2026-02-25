@@ -46,8 +46,10 @@ router = APIRouter(prefix="/workshops", tags=["Workshops"])
 async def _rollback_workshop_resources(
     created_users: list[dict],
     created_rg_specs: list[dict],
+    assigned_subscription_ids: list[str],
     entra_id,
     resource_mgr,
+    storage,
 ) -> None:
     """워크샵 생성 실패 시 이미 생성된 Azure 리소스를 정리한다.
 
@@ -58,16 +60,19 @@ async def _rollback_workshop_resources(
     Args:
         created_users: 생성된 Entra ID 사용자 목록.
         created_rg_specs: 생성된 리소스 그룹 스펙 (name, subscription_id).
+        assigned_subscription_ids: 할당된 구독 ID 목록 (해제 필요).
         entra_id: EntraIDService 인스턴스.
         resource_mgr: ResourceManagerService 인스턴스.
+        storage: StorageService 인스턴스.
     """
-    if not created_users and not created_rg_specs:
+    if not created_users and not created_rg_specs and not assigned_subscription_ids:
         return
 
     logger.warning(
-        "Rolling back workshop resources: %d users, %d resource groups",
+        "Rolling back workshop resources: %d users, %d resource groups, %d subscriptions",
         len(created_users),
         len(created_rg_specs),
+        len(assigned_subscription_ids),
     )
 
     # 역순: 리소스 그룹 먼저 삭제 (비용 발생 리소스 포함)
@@ -87,6 +92,14 @@ async def _rollback_workshop_resources(
                 logger.info("Rollback: deleted %d Entra ID users", len(upns))
             except Exception as e:
                 logger.error("Rollback: failed to delete users: %s", e)
+
+    # 마지막: 할당된 구독 해제
+    if assigned_subscription_ids:
+        try:
+            await storage.release_subscriptions(assigned_subscription_ids)
+            logger.info("Rollback: released %d subscriptions", len(assigned_subscription_ids))
+        except Exception as e:
+            logger.error("Rollback: failed to release subscriptions: %s", e)
 
 
 class ResourceType(BaseModel):
@@ -131,13 +144,11 @@ async def get_resource_types(resource_manager=Depends(get_resource_manager_servi
 
 
 def _build_cost_specs(participants: list[dict]) -> list[dict]:
-    """참가자 목록에서 비용 조회용 스펙을 추출한다."""
+    """참가자 목록에서 비용 조회용 스펙을 추출한다 (구독 레벨)."""
     return [
-        {
-            "resource_group": p.get("resource_group"),
-            "subscription_id": p.get("subscription_id"),
-        }
+        {"subscription_id": p.get("subscription_id")}
         for p in participants
+        if p.get("subscription_id")
     ]
 
 
@@ -303,19 +314,22 @@ async def _setup_participant(
     rg_result: Optional[dict],
     base_resources_template: str,
     regions: list[str],
-    services: list[str],
+    denied_services: list[str],
     storage,
     resource_mgr,
     policy,
 ) -> Optional[dict]:
     """개별 참가자의 RBAC, ARM 배포, 정책을 설정한다.
 
+    RBAC와 Policy는 구독 레벨에 적용하고,
+    ARM 템플릿은 리소스 그룹에 배포한다.
+
     Args:
         user: Entra ID 사용자 정보.
         rg_result: 생성된 리소스 그룹 정보 (없으면 None 반환).
         base_resources_template: ARM 템플릿 이름.
         regions: 허용 리전 목록.
-        services: 허용 서비스 목록.
+        denied_services: 차단 서비스 목록.
         storage: StorageService 인스턴스.
         resource_mgr: ResourceManagerService 인스턴스.
         policy: PolicyService 인스턴스.
@@ -329,8 +343,10 @@ async def _setup_participant(
     try:
         subscription_id = user["subscription_id"]
 
+        # RBAC: 구독 레벨에 역할 할당
+        sub_scope = f"/subscriptions/{subscription_id}"
         await resource_mgr.assign_rbac_role(
-            scope=rg_result["id"],
+            scope=sub_scope,
             principal_id=user["object_id"],
             role_name=settings.default_user_role,
             subscription_id=subscription_id,
@@ -346,12 +362,11 @@ async def _setup_participant(
                     subscription_id=subscription_id,
                 )
 
-        # Policy scope: resource group level to isolate participants in the same subscription
-        rg_scope = f"/subscriptions/{subscription_id}/resourceGroups/{rg_result['name']}"
+        # Policy: 구독 레벨에 정책 할당
         await policy.assign_workshop_policies(
-            scope=rg_scope,
+            scope=sub_scope,
             allowed_locations=regions,
-            allowed_resource_types=services,
+            denied_resource_types=denied_services,
             subscription_id=subscription_id,
         )
 
@@ -376,7 +391,7 @@ async def create_workshop(
     end_date: str = Form(...),
     base_resources_template: str = Form(...),
     allowed_regions: str = Form(...),
-    allowed_services: str = Form(...),
+    denied_services: str = Form(default=""),
     participants_file: UploadFile = File(...),
     survey_url: Optional[str] = Form(default=None, description="M365 Forms 만족도 조사 URL"),
     storage=Depends(get_storage_service),
@@ -393,26 +408,37 @@ async def create_workshop(
     """
     # Step 0: 입력값 사전 검증 (Azure 리소스 생성 전에 빠르게 실패)
     regions = [r.strip() for r in allowed_regions.split(",")]
-    services = [s.strip() for s in allowed_services.split(",")]
+    services = [s.strip() for s in denied_services.split(",") if s.strip()]
     try:
         WorkshopCreateInput(
             name=name,
             start_date=start_date,
             end_date=end_date,
             allowed_regions=regions,
-            allowed_services=services,
+            denied_services=services,
         )
     except Exception as e:
         raise InvalidInputError(f"Invalid workshop input: {e}") from e
 
     created_users: list[dict] = []
     created_rg_specs: list[dict] = []
+    assigned_subscription_ids: list[str] = []
 
     try:
         workshop_id = str(uuid.uuid4())
         participants = await parse_participants_csv(participants_file)
-        assignment = await subscription_service.assign_subscriptions(participants)
+        assignment = await subscription_service.assign_subscriptions(
+            participants, workshop_id,
+        )
         participants = assignment["participants"]
+
+        # 할당된 구독 ID를 추적 (rollback용)
+        assigned_subscription_ids = list({
+            p["subscription_id"] for p in participants if p.get("subscription_id")
+        })
+
+        # ETag 기반 구독 잠금
+        await storage.acquire_subscriptions(assigned_subscription_ids, workshop_id)
 
         logger.info(
             "Creating workshop '%s' with %d participants",
@@ -467,7 +493,7 @@ async def create_workshop(
                 ),
                 base_resources_template=base_resources_template,
                 regions=regions,
-                services=services,
+                denied_services=services,
                 storage=storage,
                 resource_mgr=resource_mgr,
                 policy=policy,
@@ -491,7 +517,7 @@ async def create_workshop(
             "end_date": end_date,
             "participants": successful_participants,
             "base_resources_template": base_resources_template,
-            "policy": {"allowed_regions": regions, "allowed_services": services},
+            "policy": {"allowed_regions": regions, "denied_services": services},
             "status": "active",
             "created_at": datetime.now(UTC).isoformat(),
             "survey_url": survey_url or "",
@@ -519,7 +545,8 @@ async def create_workshop(
         )
     except Exception:
         await _rollback_workshop_resources(
-            created_users, created_rg_specs, entra_id, resource_mgr
+            created_users, created_rg_specs, assigned_subscription_ids,
+            entra_id, resource_mgr, storage,
         )
         raise
 
@@ -530,23 +557,55 @@ async def delete_workshop(
     storage=Depends(get_storage_service),
     entra_id=Depends(get_entra_id_service),
     resource_mgr=Depends(get_resource_manager_service),
+    policy=Depends(get_policy_service),
 ):
     """워크샵과 관련 리소스를 모두 삭제한다 (구독별 지원).
 
+    참가자별 구독 내 모든 리소스를 삭제하고, 구독 레벨 Policy/RBAC를
+    제거한 뒤, 구독 사용 추적을 해제한다.
     삭제 실패 항목이 있으면 status를 'failed'로 변경하고 메타데이터를 유지한다.
     """
     metadata = await _get_workshop_or_raise(storage, workshop_id)
     participants = metadata.get("participants", [])
     workshop_name = metadata.get("name", "")
 
-    # Step 1: 리소스 그룹 삭제
-    rg_specs = [
-        {
-            "name": p.get("resource_group"),
-            "subscription_id": p.get("subscription_id"),
-        }
-        for p in participants
-    ]
+    # Step 1: 참가자별 구독 내 RG 삭제 + 구독 레벨 Policy 제거
+    rg_specs = []
+    subscription_ids_to_release: list[str] = []
+
+    for p in participants:
+        subscription_id = p.get("subscription_id")
+        rg_name = p.get("resource_group")
+
+        if subscription_id:
+            subscription_ids_to_release.append(subscription_id)
+
+            # 구독 레벨 Policy 제거 시도
+            sub_scope = f"/subscriptions/{subscription_id}"
+            try:
+                await policy.delete_policy_assignment(
+                    scope=sub_scope,
+                    assignment_name="workshop-allowed-locations",
+                    subscription_id=subscription_id,
+                )
+            except Exception as e:
+                logger.warning("Failed to remove location policy on %s: %s", subscription_id, e)
+
+            try:
+                await policy.delete_policy_assignment(
+                    scope=sub_scope,
+                    assignment_name="workshop-denied-resources",
+                    subscription_id=subscription_id,
+                )
+            except Exception as e:
+                logger.warning("Failed to remove deny policy on %s: %s", subscription_id, e)
+
+        if rg_name:
+            rg_specs.append({
+                "name": rg_name,
+                "subscription_id": subscription_id,
+            })
+
     rg_status = await resource_mgr.delete_resource_groups_bulk(rg_specs)
 
     # Step 2: Entra ID 사용자 삭제
@@ -601,6 +660,12 @@ async def delete_workshop(
         metadata["status"] = "failed"
         await storage.save_workshop_metadata(workshop_id, metadata)
 
+        # 부분 실패해도 구독은 해제 (RG 삭제 실패는 재시도로 처리)
+        try:
+            await storage.release_subscriptions(subscription_ids_to_release)
+        except Exception as e:
+            logger.error("Failed to release subscriptions after partial deletion: %s", e)
+
         logger.warning(
             "Workshop %s deletion partially failed: %d failures",
             workshop_id,
@@ -615,7 +680,12 @@ async def delete_workshop(
             ),
         )
 
-    # 전부 성공 → 메타데이터 삭제
+    # 전부 성공 → 구독 해제 + 메타데이터 삭제
+    try:
+        await storage.release_subscriptions(subscription_ids_to_release)
+    except Exception as e:
+        logger.error("Failed to release subscriptions after deletion: %s", e)
+
     await storage.delete_workshop_metadata(workshop_id)
 
     logger.info("Workshop deleted: %s", workshop_id)

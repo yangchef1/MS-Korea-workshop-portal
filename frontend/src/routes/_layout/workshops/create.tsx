@@ -26,16 +26,8 @@ interface ParticipantInput {
   email: string
 }
 
-// Default selected resource types for new workshops
-const defaultSelectedResourceTypes = [
-  "Microsoft.Compute/virtualMachines",
-  "Microsoft.Compute/disks",
-  "Microsoft.Network/virtualNetworks",
-  "Microsoft.Network/networkSecurityGroups",
-  "Microsoft.Network/publicIPAddresses",
-  "Microsoft.Network/networkInterfaces",
-  "Microsoft.Storage/storageAccounts",
-]
+// Default denied resource types for new workshops (empty = allow everything)
+const defaultDeniedResourceTypes: string[] = []
 
 function CreateWorkshop() {
   const navigate = useNavigate()
@@ -52,7 +44,6 @@ function CreateWorkshop() {
   })
 
   const [selectedServices, setSelectedServices] = useState<string[]>([])
-
   const [participants, setParticipants] = useState<ParticipantInput[]>([
     { email: "" },
   ])
@@ -84,7 +75,7 @@ function CreateWorkshop() {
   useEffect(() => {
     if (resourceTypes.length > 0 && !hasInitializedDefaults.current) {
       const availableValues = new Set(resourceTypes.map((rt) => rt.value))
-      const matched = defaultSelectedResourceTypes.filter((v) =>
+      const matched = defaultDeniedResourceTypes.filter((v) =>
         availableValues.has(v)
       )
       setSelectedServices(matched)
@@ -135,7 +126,7 @@ function CreateWorkshop() {
       end_date: formData.end_date,
       base_resources_template: formData.infra_template || "none",
       allowed_regions: formData.region,
-      allowed_services: selectedServices.join(","),
+      denied_services: selectedServices.join(","),
       participants_file: csvFile,
       survey_url: formData.survey_url || undefined,
     })
@@ -242,9 +233,9 @@ function CreateWorkshop() {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="allowed_services">허용 Azure 리소스 타입</Label>
+              <Label htmlFor="denied_services">차단 Azure 리소스 타입</Label>
               <select
-                id="allowed_services"
+                id="denied_services"
                 value=""
                 onChange={(e) => {
                   const value = e.target.value
@@ -255,7 +246,7 @@ function CreateWorkshop() {
                 }}
                 className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring text-muted-foreground"
               >
-                <option value="">리소스 타입 선택</option>
+                <option value="">차단할 리소스 타입 선택</option>
                 {Object.entries(groupedResourceTypes).map(([category, resources]) => (
                   <optgroup key={category} label={category}>
                     {resources
@@ -297,7 +288,7 @@ function CreateWorkshop() {
                 </div>
               )}
               <p className="text-xs text-muted-foreground">
-                워크샵에서 허용할 Azure 리소스를 선택하세요.
+                워크샵에서 차단할 Azure 리소스를 선택하세요. 선택하지 않으면 모든 리소스가 허용됩니다.
               </p>
             </div>
 

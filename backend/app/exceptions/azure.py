@@ -197,6 +197,26 @@ class UserDeletionError(EntraIDServiceError):
             self.details["user_id"] = user_id
 
 
+class InsufficientSubscriptionsError(AzureServiceError):
+    """Available subscriptions are fewer than participants.
+
+    Raised when 1:1 subscription-per-participant assignment cannot be
+    fulfilled because the pool of unused subscriptions is too small.
+    """
+
+    def __init__(
+        self,
+        message: str = "Not enough available subscriptions",
+        required: int = 0,
+        available: int = 0,
+    ):
+        super().__init__(message, "SubscriptionService")
+        self.code = "INSUFFICIENT_SUBSCRIPTIONS"
+        self.status_code = 409
+        self.details["required"] = required
+        self.details["available"] = available
+
+
 class CostServiceError(AzureServiceError):
     """Base exception for Cost Management service errors"""
     

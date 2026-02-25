@@ -13,7 +13,8 @@ import logging
 from functools import lru_cache
 from typing import Any
 
-from azure.core.exceptions import ResourceNotFoundError
+from azure.core.exceptions import HttpResponseError, ResourceNotFoundError
+from azure.core import MatchConditions
 from azure.data.tables.aio import TableServiceClient
 from azure.identity.aio import (
     AzureCliCredential,
@@ -41,6 +42,8 @@ TEMPLATE_PARTITION_KEY = "template"
 USER_PARTITION_KEY = "user"
 PORTAL_SETTINGS_PARTITION_KEY = "config"
 PORTAL_SETTINGS_ROW_KEY_SUBSCRIPTIONS = "subscriptions"
+
+_ACQUIRE_MAX_RETRIES = 3
 
 
 class StorageService:
@@ -429,11 +432,12 @@ class StorageService:
     # Portal settings (subscriptions allow/deny)
     # ------------------------------------------------------------------
 
-    async def get_portal_subscription_settings(self) -> dict[str, list[str]]:
-        """구독 허용/제외 설정을 조회한다.
+    async def get_portal_subscription_settings(self) -> dict[str, Any]:
+        """구독 허용/제외 및 사용 중 설정을 조회한다.
 
         Returns:
-            allow_list와 deny_list를 포함하는 딕셔너리. 설정이 없으면 빈 리스트를 반환한다.
+            allow_list, deny_list, in_use_map을 포함하는 딕셔너리.
+            설정이 없으면 빈 값을 반환한다.
         """
         await self._ensure_tables_exist()
 
@@ -446,41 +450,197 @@ class StorageService:
             return {
                 "allow_list": json.loads(entity.get("allow_list_json", "[]")),
                 "deny_list": json.loads(entity.get("deny_list_json", "[]")),
+                "in_use_map": json.loads(entity.get("in_use_map_json", "{}")),
             }
         except ResourceNotFoundError:
-            return {"allow_list": [], "deny_list": []}
+            return {"allow_list": [], "deny_list": [], "in_use_map": {}}
         except Exception as e:
             logger.error("Failed to get portal subscription settings: %s", e)
             raise
 
     async def save_portal_subscription_settings(
-        self, allow_list: list[str], deny_list: list[str]
-    ) -> dict[str, list[str]]:
-        """구독 허용/제외 설정을 저장한다.
+        self,
+        allow_list: list[str],
+        deny_list: list[str],
+        in_use_map: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """구독 허용/제외 및 사용 중 설정을 저장한다.
 
         Args:
             allow_list: 허용 구독 ID 목록(빈 리스트면 전체 허용).
             deny_list: 제외 구독 ID 목록.
+            in_use_map: 구독 ID → 워크샵 ID 매핑. None이면 기존 값 유지.
 
         Returns:
-            저장된 allow_list와 deny_list.
+            저장된 설정 딕셔너리.
         """
         await self._ensure_tables_exist()
 
         try:
             table_client = self.table_service_client.get_table_client(PORTAL_SETTINGS_TABLE)
+
+            # in_use_map이 None이면 기존 값을 유지하기 위해 먼저 조회
+            if in_use_map is None:
+                current = await self.get_portal_subscription_settings()
+                in_use_map = current.get("in_use_map", {})
+
             entity = {
                 "PartitionKey": PORTAL_SETTINGS_PARTITION_KEY,
                 "RowKey": PORTAL_SETTINGS_ROW_KEY_SUBSCRIPTIONS,
                 "allow_list_json": json.dumps(allow_list),
                 "deny_list_json": json.dumps(deny_list),
+                "in_use_map_json": json.dumps(in_use_map),
             }
             await table_client.upsert_entity(entity)
-            logger.info("Saved portal subscription settings (allow=%d, deny=%d)", len(allow_list), len(deny_list))
-            return {"allow_list": allow_list, "deny_list": deny_list}
+            logger.info(
+                "Saved portal subscription settings (allow=%d, deny=%d, in_use=%d)",
+                len(allow_list), len(deny_list), len(in_use_map),
+            )
+            return {"allow_list": allow_list, "deny_list": deny_list, "in_use_map": in_use_map}
         except Exception as e:
             logger.error("Failed to save portal subscription settings: %s", e)
             raise
+
+    async def acquire_subscriptions(
+        self, subscription_ids: list[str], workshop_id: str,
+    ) -> None:
+        """구독을 워크샵에 배타적으로 할당한다 (ETag optimistic concurrency).
+
+        in_use_map에 subscription_id → workshop_id 매핑을 추가한다.
+        동시 수정 충돌(412 Precondition Failed) 시 최대 3회 재시도한다.
+
+        Args:
+            subscription_ids: 할당할 구독 ID 목록.
+            workshop_id: 할당 대상 워크샵 ID.
+
+        Raises:
+            ConflictError: 재시도 한도 초과 시.
+        """
+        from app.exceptions import ConflictError
+
+        await self._ensure_tables_exist()
+        table_client = self.table_service_client.get_table_client(PORTAL_SETTINGS_TABLE)
+
+        for attempt in range(_ACQUIRE_MAX_RETRIES):
+            try:
+                try:
+                    entity = await table_client.get_entity(
+                        partition_key=PORTAL_SETTINGS_PARTITION_KEY,
+                        row_key=PORTAL_SETTINGS_ROW_KEY_SUBSCRIPTIONS,
+                    )
+                    etag = entity.metadata["etag"]
+                except ResourceNotFoundError:
+                    entity = {
+                        "PartitionKey": PORTAL_SETTINGS_PARTITION_KEY,
+                        "RowKey": PORTAL_SETTINGS_ROW_KEY_SUBSCRIPTIONS,
+                        "allow_list_json": "[]",
+                        "deny_list_json": "[]",
+                        "in_use_map_json": "{}",
+                    }
+                    await table_client.upsert_entity(entity)
+                    entity = await table_client.get_entity(
+                        partition_key=PORTAL_SETTINGS_PARTITION_KEY,
+                        row_key=PORTAL_SETTINGS_ROW_KEY_SUBSCRIPTIONS,
+                    )
+                    etag = entity.metadata["etag"]
+
+                in_use_map: dict[str, str] = json.loads(
+                    entity.get("in_use_map_json", "{}")
+                )
+
+                # 이미 다른 워크샵에 할당된 구독이 있는지 확인
+                conflicts = [
+                    sid for sid in subscription_ids
+                    if sid in in_use_map and in_use_map[sid] != workshop_id
+                ]
+                if conflicts:
+                    raise ConflictError(
+                        f"Subscriptions already in use by other workshops: {conflicts}"
+                    )
+
+                for sid in subscription_ids:
+                    in_use_map[sid] = workshop_id
+
+                entity["in_use_map_json"] = json.dumps(in_use_map)
+                await table_client.update_entity(
+                    entity,
+                    mode="replace",
+                    etag=etag,
+                    match_condition=MatchConditions.IfNotModified,
+                )
+                logger.info(
+                    "Acquired %d subscriptions for workshop %s",
+                    len(subscription_ids), workshop_id,
+                )
+                return
+
+            except HttpResponseError as e:
+                if e.status_code == 412 and attempt < _ACQUIRE_MAX_RETRIES - 1:
+                    logger.warning(
+                        "ETag conflict on acquire_subscriptions (attempt %d/%d), retrying",
+                        attempt + 1, _ACQUIRE_MAX_RETRIES,
+                    )
+                    continue
+                raise ConflictError(
+                    "Failed to acquire subscriptions due to concurrent modification"
+                ) from e
+
+    async def release_subscriptions(self, subscription_ids: list[str]) -> None:
+        """워크샵에서 사용 중인 구독을 해제한다 (ETag optimistic concurrency).
+
+        in_use_map에서 지정된 구독 ID를 제거한다.
+
+        Args:
+            subscription_ids: 해제할 구독 ID 목록.
+        """
+        from app.exceptions import ConflictError
+
+        if not subscription_ids:
+            return
+
+        await self._ensure_tables_exist()
+        table_client = self.table_service_client.get_table_client(PORTAL_SETTINGS_TABLE)
+
+        for attempt in range(_ACQUIRE_MAX_RETRIES):
+            try:
+                try:
+                    entity = await table_client.get_entity(
+                        partition_key=PORTAL_SETTINGS_PARTITION_KEY,
+                        row_key=PORTAL_SETTINGS_ROW_KEY_SUBSCRIPTIONS,
+                    )
+                    etag = entity.metadata["etag"]
+                except ResourceNotFoundError:
+                    return  # Nothing to release
+
+                in_use_map: dict[str, str] = json.loads(
+                    entity.get("in_use_map_json", "{}")
+                )
+
+                for sid in subscription_ids:
+                    in_use_map.pop(sid, None)
+
+                entity["in_use_map_json"] = json.dumps(in_use_map)
+                await table_client.update_entity(
+                    entity,
+                    mode="replace",
+                    etag=etag,
+                    match_condition=MatchConditions.IfNotModified,
+                )
+                logger.info(
+                    "Released %d subscriptions", len(subscription_ids),
+                )
+                return
+
+            except HttpResponseError as e:
+                if e.status_code == 412 and attempt < _ACQUIRE_MAX_RETRIES - 1:
+                    logger.warning(
+                        "ETag conflict on release_subscriptions (attempt %d/%d), retrying",
+                        attempt + 1, _ACQUIRE_MAX_RETRIES,
+                    )
+                    continue
+                raise ConflictError(
+                    "Failed to release subscriptions due to concurrent modification"
+                ) from e
 
     # ------------------------------------------------------------------
     # Templates
