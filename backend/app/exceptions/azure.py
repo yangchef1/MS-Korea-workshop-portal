@@ -110,6 +110,14 @@ class DeploymentError(ResourceManagerError):
             self.details["deployment_name"] = deployment_name
 
 
+class BicepCompilationError(DeploymentError):
+    """Bicep template compilation to ARM JSON failed."""
+
+    def __init__(self, message: str = "Bicep compilation failed"):
+        super().__init__(message)
+        self.code = "BICEP_COMPILATION_ERROR"
+
+
 class StorageServiceError(AzureServiceError):
     """Base exception for Storage service errors"""
     

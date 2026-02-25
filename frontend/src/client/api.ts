@@ -314,7 +314,7 @@ export interface WorkshopCost {
 }
 
 /** Infrastructure template type. */
-export type TemplateType = "arm" | "bicep" | "terraform"
+export type TemplateType = "arm" | "bicep"
 
 export interface InfraTemplate {
   name: string

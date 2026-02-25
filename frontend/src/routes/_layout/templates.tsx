@@ -42,7 +42,6 @@ export const Route = createFileRoute("/_layout/templates")({
 const TEMPLATE_TYPE_LABELS: Record<TemplateType, string> = {
   arm: "ARM Templates",
   bicep: "Bicep",
-  terraform: "Terraform",
 }
 
 /** Default template content per template type. */
@@ -58,7 +57,6 @@ const DEFAULT_TEMPLATE_CONTENT: Record<TemplateType, string> = {
     2
   ),
   bicep: "// Bicep template\n",
-  terraform: '# Terraform configuration\n\nprovider "azurerm" {\n  features {}\n}\n',
 }
 
 // ---------------------------------------------------------------------------
@@ -279,7 +277,6 @@ function TemplateDetailPanel({
             >
               <option value="arm">ARM Templates</option>
               <option value="bicep">Bicep</option>
-              <option value="terraform">Terraform</option>
             </select>
           </div>
         )}
@@ -419,7 +416,7 @@ function CreateTemplatePanel({ onClose, onCreated }: CreateTemplatePanelProps) {
           >
             <option value="arm">ARM Templates</option>
             <option value="bicep">Bicep</option>
-            <option value="terraform">Terraform</option>
+
           </select>
         </div>
 

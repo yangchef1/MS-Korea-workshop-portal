@@ -12,6 +12,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
+# Install Bicep standalone CLI for Bicep → ARM template compilation
+RUN curl -Lo /usr/local/bin/bicep \
+        https://github.com/Azure/bicep/releases/latest/download/bicep-linux-x64 \
+    && chmod +x /usr/local/bin/bicep \
+    && bicep --version
+
 # Create non-root user for security
 RUN useradd --create-home --shell /bin/bash appuser
 
