@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
-import { useMutation, useQuery } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useState, useEffect, useRef } from "react"
 import { ArrowLeft, Upload, Plus, Trash2, X } from "lucide-react"
 import { Link } from "@tanstack/react-router"
@@ -92,9 +92,12 @@ function CreateWorkshop() {
     return acc
   }, {} as Record<string, typeof resourceTypes>)
 
+  const queryClient = useQueryClient()
+
   const createMutation = useMutation({
     mutationFn: (data: CreateWorkshopRequest) => workshopApi.create(data),
     onSuccess: (workshop) => {
+      queryClient.invalidateQueries({ queryKey: ["workshops"] })
       showSuccessToast("워크샵이 성공적으로 생성되었습니다")
       navigate({ to: "/workshops/$workshopId", params: { workshopId: workshop.id } })
     },

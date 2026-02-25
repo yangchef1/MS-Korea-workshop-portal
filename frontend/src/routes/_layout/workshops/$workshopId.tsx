@@ -1,6 +1,6 @@
-import { createFileRoute } from "@tanstack/react-router"
+import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import { useSuspenseQuery, useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Suspense, useState } from "react"
+import { Suspense, useMemo, useState } from "react"
 import { Link } from "@tanstack/react-router"
 import {
   ArrowLeft,
@@ -37,6 +37,17 @@ import {
 } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"
 import useCustomToast from "@/hooks/useCustomToast"
 import useAuth from "@/hooks/useAuth"
 
@@ -237,7 +248,7 @@ function ResourcesList({ workshopId, refetch, isRefetching }: { workshopId: stri
   )
 }
 
-function CostBreakdownRow({ item }: { item: CostBreakdown }) {
+function CostBreakdownRow({ item, alias }: { item: CostBreakdown; alias?: string }) {
   return (
     <div className="flex items-center justify-between p-4 border rounded-lg">
       <div className="flex items-center gap-3">
@@ -245,6 +256,11 @@ function CostBreakdownRow({ item }: { item: CostBreakdown }) {
           <DollarSign className="h-4 w-4 text-primary" />
         </div>
         <div className="flex flex-col gap-1">
+          {alias && (
+            <div className="font-medium text-sm">
+              {alias}
+            </div>
+          )}
           <div className="font-medium text-xs text-muted-foreground truncate max-w-[300px]">
             {item.subscription_id}
           </div>
@@ -265,7 +281,16 @@ function CostBreakdownRow({ item }: { item: CostBreakdown }) {
   )
 }
 
-function CostAnalysis({ workshopId, refetch, isRefetching }: { workshopId: string; refetch: () => void; isRefetching: boolean }) {
+function CostAnalysis({ workshopId, participants, refetch, isRefetching }: { workshopId: string; participants?: Participant[]; refetch: () => void; isRefetching: boolean }) {
+  const subscriptionToAlias = useMemo(() => {
+    const map = new Map<string, string>()
+    participants?.forEach((p) => {
+      if (p.subscription_id && p.alias) {
+        map.set(p.subscription_id, p.alias)
+      }
+    })
+    return map
+  }, [participants])
   const { data, isLoading } = useQuery({
     queryKey: ['workshop-cost', workshopId],
     queryFn: () => workshopApi.getCost(workshopId),
@@ -309,7 +334,7 @@ function CostAnalysis({ workshopId, refetch, isRefetching }: { workshopId: strin
         {data?.breakdown && data.breakdown.length > 0 ? (
           <div className="space-y-2">
             {data.breakdown.map((item) => (
-              <CostBreakdownRow key={item.subscription_id} item={item} />
+              <CostBreakdownRow key={item.subscription_id} item={item} alias={subscriptionToAlias.get(item.subscription_id)} />
             ))}
           </div>
         ) : (
@@ -655,9 +680,24 @@ function DeletionFailuresTab({ workshopId }: { workshopId: string }) {
 
 function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
   const { data: workshop } = useSuspenseQuery(getWorkshopQueryOptions(workshopId))
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const { showSuccessToast, showErrorToast } = useCustomToast()
   const invalidAliases = new Set(
     workshop.invalid_participants?.map((p) => p.alias) || []
   )
+
+  const deleteMutation = useMutation({
+    mutationFn: () => workshopApi.delete(workshopId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["workshops"] })
+      showSuccessToast("워크샵이 삭제되었습니다")
+      navigate({ to: "/" })
+    },
+    onError: () => {
+      showErrorToast("워크샵 삭제에 실패했습니다")
+    },
+  })
   
   // Resources and Cost queries for refresh functionality
   const { refetch: refetchResources, isRefetching: isRefetchingResources } = useQuery({
@@ -710,10 +750,31 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
             <Download className="h-4 w-4 mr-2" />
             계정 정보 다운로드
           </Button>
-          <Button variant="destructive" size="sm">
-            <Trash2 className="h-4 w-4 mr-2" />
-            삭제
-          </Button>
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button variant="destructive" size="sm" disabled={deleteMutation.isPending}>
+                <Trash2 className="h-4 w-4 mr-2" />
+                {deleteMutation.isPending ? "삭제 중..." : "삭제"}
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>워크샵을 삭제하시겠습니까?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  워크샵 "{workshop.name}"을(를) 삭제하면 관련된 리소스 그룹과 참가자 계정이 모두 삭제됩니다. 이 작업은 되돌릴 수 없습니다.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>취소</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() => deleteMutation.mutate()}
+                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                >
+                  삭제
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
       </div>
 
@@ -749,9 +810,10 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
                 <Calendar className="h-4 w-4" />
                 <span className="text-sm">기간</span>
               </div>
-              <p className="text-xl font-semibold">
-                {new Date(workshop.start_date).toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })} ~ {new Date(workshop.end_date).toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-              </p>
+              <div className="text-lg font-semibold leading-relaxed">
+                <p>{new Date(workshop.start_date).toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>
+                <p>{new Date(workshop.end_date).toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>
+              </div>
             </div>
           </CardContent>
         </Card>
@@ -839,11 +901,11 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
             <CardHeader>
               <CardTitle>비용 분석</CardTitle>
               <CardDescription>
-                워크샵 기간({new Date(workshop.start_date).toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })} ~ {new Date(workshop.end_date).toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}) 동안의 비용 현황입니다
+                워크샵 기간({new Date(workshop.start_date).toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })} ~ {new Date(workshop.end_date).toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })})의 비용 현황입니다
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <CostAnalysis workshopId={workshop.id} refetch={refetchCost} isRefetching={isRefetchingCost} />
+              <CostAnalysis workshopId={workshop.id} participants={workshop.participants} refetch={refetchCost} isRefetching={isRefetchingCost} />
             </CardContent>
           </Card>
         </TabsContent>
