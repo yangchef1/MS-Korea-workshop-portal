@@ -52,7 +52,9 @@ resource funcStorage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   properties: {
     supportsHttpsTrafficOnly: true
     minimumTlsVersion: 'TLS1_2'
-    allowSharedKeyAccess: false
+    // Consumption plan requires Shared Key access for deployment (az func deploy).
+    // Runtime uses Managed Identity via AzureWebJobsStorage__accountName.
+    allowSharedKeyAccess: true
   }
 }
 
