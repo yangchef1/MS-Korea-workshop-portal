@@ -268,6 +268,8 @@ export interface Workshop {
   policy?: {
     allowed_regions: string[]
     denied_services: string[]
+    allowed_vm_skus?: string[]
+    vm_sku_preset?: string
   }
   allowed_regions?: string[]
   start_date: string
@@ -353,6 +355,21 @@ export interface ResourceType {
   category: string
 }
 
+/** VM SKU 정보. */
+export interface VmSku {
+  name: string
+  family: string
+  vcpus: number
+  memory_gb: number
+}
+
+/** VM SKU 프리셋: key → { label, description, skus }. */
+export type VmSkuPresets = Record<string, {
+  label: string
+  description: string
+  skus: string[]
+}>
+
 /** Deletion failure resource type. */
 export type DeletionFailureResourceType = "resource_group" | "user"
 
@@ -383,6 +400,8 @@ export interface CreateWorkshopRequest {
   base_resources_template: string
   allowed_regions: string  // comma-separated
   denied_services: string  // comma-separated
+  allowed_vm_skus?: string  // comma-separated
+  vm_sku_preset?: string
   participants_file: File
   survey_url?: string
   description?: string
@@ -429,6 +448,12 @@ export const workshopApi = {
     if (data.description) {
       formData.append("description", data.description)
     }
+    if (data.allowed_vm_skus) {
+      formData.append("allowed_vm_skus", data.allowed_vm_skus)
+    }
+    if (data.vm_sku_preset) {
+      formData.append("vm_sku_preset", data.vm_sku_preset)
+    }
 
     const response = await apiClient.post<Workshop>("/workshops", formData, {
       headers: {
@@ -474,6 +499,20 @@ export const workshopApi = {
 
   getResourceTypes: async (): Promise<ResourceType[]> => {
     const response = await apiClient.get<ResourceType[]>("/workshops/resource-types")
+    return response.data
+  },
+
+  /** 특정 리전의 VM SKU 목록을 조회한다 (24시간 캐시). */
+  getVmSkus: async (location: string): Promise<VmSku[]> => {
+    const response = await apiClient.get<VmSku[]>("/workshops/vm-skus", {
+      params: { location },
+    })
+    return response.data
+  },
+
+  /** VM SKU 프리셋 목록을 조회한다. */
+  getVmSkuPresets: async (): Promise<VmSkuPresets> => {
+    const response = await apiClient.get<VmSkuPresets>("/workshops/vm-sku-presets")
     return response.data
   },
 
