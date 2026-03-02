@@ -313,6 +313,7 @@ async def _setup_participant(
     storage,
     resource_mgr,
     policy,
+    allowed_vm_skus: list[str] | None = None,
 ) -> Optional[dict]:
     """개별 참가자의 RBAC, ARM 배포, 정책을 설정한다.
 
@@ -328,6 +329,7 @@ async def _setup_participant(
         storage: StorageService 인스턴스.
         resource_mgr: ResourceManagerService 인스턴스.
         policy: PolicyService 인스턴스.
+        allowed_vm_skus: 허용할 VM SKU 목록. 비어있으면 정책 미할당.
 
     Returns:
         참가자 데이터 딕셔너리 또는 실패 시 None.
@@ -363,6 +365,7 @@ async def _setup_participant(
             allowed_locations=regions,
             denied_resource_types=denied_services,
             subscription_id=subscription_id,
+            allowed_vm_skus=allowed_vm_skus or [],
         )
 
         return {
@@ -386,6 +389,8 @@ async def create_workshop(
     base_resources_template: str = Form(...),
     allowed_regions: str = Form(...),
     denied_services: str = Form(default=""),
+    allowed_vm_skus: str = Form(default=""),
+    vm_sku_preset: str = Form(default=""),
     participants_file: UploadFile = File(...),
     description: str = Form(default=""),
     survey_url: Optional[str] = Form(default=None, description="M365 Forms 만족도 조사 URL"),
@@ -405,6 +410,16 @@ async def create_workshop(
     # Step 0: 입력값 사전 검증 (Azure 리소스 생성 전에 빠르게 실패)
     regions = [r.strip() for r in allowed_regions.split(",")]
     services = [s.strip() for s in denied_services.split(",") if s.strip()]
+    vm_skus = [s.strip() for s in allowed_vm_skus.split(",") if s.strip()]
+
+    # VM 리소스 차단과 VM SKU 제한 충돌 방어: VM 자체가 차단되면 SKU 정책 무의미
+    if vm_skus and settings.VM_RESOURCE_TYPE in services:
+        logger.warning(
+            "VM resource type is denied but allowed_vm_skus provided; "
+            "ignoring VM SKU policy (vm_skus=%s)", vm_skus
+        )
+        vm_skus = []
+
     try:
         WorkshopCreateInput(
             name=name,
@@ -412,6 +427,7 @@ async def create_workshop(
             end_date=end_date,
             allowed_regions=regions,
             denied_services=services,
+            allowed_vm_skus=vm_skus,
         )
     except Exception as e:
         raise InvalidInputError(f"Invalid workshop input: {e}") from e
@@ -491,6 +507,7 @@ async def create_workshop(
                 storage=storage,
                 resource_mgr=resource_mgr,
                 policy=policy,
+                allowed_vm_skus=vm_skus,
             )
             for user, spec in zip(user_results, rg_specs)
         ]
@@ -511,7 +528,12 @@ async def create_workshop(
             "end_date": end_date,
             "participants": successful_participants,
             "base_resources_template": base_resources_template,
-            "policy": {"allowed_regions": regions, "denied_services": services},
+            "policy": {
+                "allowed_regions": regions,
+                "denied_services": services,
+                "allowed_vm_skus": vm_skus,
+                "vm_sku_preset": vm_sku_preset or None,
+            },
             "status": "active",
             "created_at": datetime.now(UTC).isoformat(),
             "created_by": user.get("name", "") if user else "",
@@ -592,6 +614,15 @@ async def delete_workshop(
                 )
             except Exception as e:
                 logger.warning("Failed to remove deny policy on %s: %s", subscription_id, e)
+
+            try:
+                await policy.delete_policy_assignment(
+                    scope=sub_scope,
+                    assignment_name="workshop-allowed-vm-skus",
+                    subscription_id=subscription_id,
+                )
+            except Exception as e:
+                logger.warning("Failed to remove VM SKU policy on %s: %s", subscription_id, e)
 
         if rg_name:
             rg_specs.append({
