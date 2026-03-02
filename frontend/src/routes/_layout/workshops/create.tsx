@@ -229,24 +229,33 @@ function CreateWorkshop() {
             <div className="space-y-2">
               <Label>허용 Azure 리전 *</Label>
               <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                {regions.map((region) => (
+                {regions.map((region) => {
+                  const isSelected = selectedRegions.includes(region.value)
+                  return (
                   <label
                     key={region.value}
-                    className="flex items-center gap-2 rounded-md border border-input px-3 py-2 cursor-pointer hover:bg-accent transition-colors has-[:checked]:border-primary has-[:checked]:bg-primary/5"
+                    className={`flex items-center gap-2 rounded-md border px-3 py-2 cursor-pointer transition-colors ${
+                      isSelected
+                        ? "border-primary bg-primary/5"
+                        : "border-input hover:bg-accent"
+                    }`}
                   >
                     <Checkbox
-                      checked={selectedRegions.includes(region.value)}
+                      checked={isSelected}
                       onCheckedChange={(checked) => {
                         setSelectedRegions((prev) =>
-                          checked
-                            ? [...prev, region.value]
+                          checked === true
+                            ? prev.includes(region.value)
+                              ? prev
+                              : [...prev, region.value]
                             : prev.filter((r) => r !== region.value)
                         )
                       }}
                     />
                     <span className="text-sm">{region.label}</span>
                   </label>
-                ))}
+                  )
+                })}
               </div>
               <p className="text-xs text-muted-foreground">
                 참가자가 리소스를 생성할 수 있는 리전을 선택하세요. 최소 1개 필수.
