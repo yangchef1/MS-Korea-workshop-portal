@@ -223,6 +223,13 @@ async def cleanup_workshop(
                         )
                     except Exception:
                         pass
+                    try:
+                        policy_client.policy_assignments.delete(
+                            scope=sub_scope,
+                            policy_assignment_name="workshop-allowed-vm-skus",
+                        )
+                    except Exception:
+                        pass
                     logger.info(f"Removed policies from subscription {sub_id}")
                 except Exception as e:
                     logger.warning(f"Failed to remove policies from {sub_id}: {e}")
