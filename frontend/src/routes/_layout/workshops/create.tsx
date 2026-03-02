@@ -14,6 +14,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import useCustomToast from "@/hooks/useCustomToast"
@@ -36,7 +37,6 @@ function CreateWorkshop() {
 
   const [formData, setFormData] = useState({
     name: "",
-    region: "koreacentral",
     start_date: "",
     end_date: "",
     infra_template: "",
@@ -44,19 +44,20 @@ function CreateWorkshop() {
     description: "",
   })
 
+  const [selectedRegions, setSelectedRegions] = useState<string[]>(["koreacentral"])
   const [selectedServices, setSelectedServices] = useState<string[]>([])
   const [participants, setParticipants] = useState<ParticipantInput[]>([
     { email: "" },
   ])
 
   // Korea regions + Early access regions where new features are deployed first
-  const regions = [
-    "koreacentral",    // Korea Central (Seoul)
-    "koreasouth",      // Korea South (Busan)
-    "eastus",          // East US - Early access region
-    "eastus2",         // East US 2 - Early access region
-    "westus2",         // West US 2 - Early access region
-    "westcentralus",   // West Central US - EUAP canary region
+  const regions: { value: string; label: string }[] = [
+    { value: "koreacentral", label: "Korea Central (Seoul)" },
+    { value: "koreasouth", label: "Korea South (Busan)" },
+    { value: "eastus", label: "East US" },
+    { value: "eastus2", label: "East US 2" },
+    { value: "westus2", label: "West US 2" },
+    { value: "westcentralus", label: "West Central US (EUAP)" },
   ]
 
   const { data: templates = [], isLoading: isTemplatesLoading } = useQuery({
@@ -119,6 +120,11 @@ function CreateWorkshop() {
       return
     }
 
+    if (selectedRegions.length === 0) {
+      showErrorToast("최소 한 개의 리전을 선택해주세요")
+      return
+    }
+
     // 참가자 이메일을 CSV Blob으로 변환
     const csvContent = "email\n" + validParticipants.map(p => p.email.trim()).join("\n")
     const csvBlob = new Blob([csvContent], { type: "text/csv" })
@@ -129,7 +135,7 @@ function CreateWorkshop() {
       start_date: formData.start_date,
       end_date: formData.end_date,
       base_resources_template: formData.infra_template || "none",
-      allowed_regions: formData.region,
+      allowed_regions: selectedRegions.join(","),
       denied_services: selectedServices.join(","),
       participants_file: csvFile,
       survey_url: formData.survey_url || undefined,
@@ -218,23 +224,33 @@ function CreateWorkshop() {
                   required
                 />
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="region">Azure 리전 *</Label>
-                <select
-                  id="region"
-                  value={formData.region}
-                  onChange={(e) =>
-                    setFormData({ ...formData, region: e.target.value })
-                  }
-                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                >
-                  {regions?.map((region) => (
-                    <option key={region} value={region}>
-                      {region}
-                    </option>
-                  ))}
-                </select>
+            </div>
+
+            <div className="space-y-2">
+              <Label>허용 Azure 리전 *</Label>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                {regions.map((region) => (
+                  <label
+                    key={region.value}
+                    className="flex items-center gap-2 rounded-md border border-input px-3 py-2 cursor-pointer hover:bg-accent transition-colors has-[:checked]:border-primary has-[:checked]:bg-primary/5"
+                  >
+                    <Checkbox
+                      checked={selectedRegions.includes(region.value)}
+                      onCheckedChange={(checked) => {
+                        setSelectedRegions((prev) =>
+                          checked
+                            ? [...prev, region.value]
+                            : prev.filter((r) => r !== region.value)
+                        )
+                      }}
+                    />
+                    <span className="text-sm">{region.label}</span>
+                  </label>
+                ))}
               </div>
+              <p className="text-xs text-muted-foreground">
+                참가자가 리소스를 생성할 수 있는 리전을 선택하세요. 최소 1개 필수.
+              </p>
             </div>
 
             <div className="space-y-2">
