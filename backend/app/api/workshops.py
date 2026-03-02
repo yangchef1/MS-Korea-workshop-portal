@@ -16,12 +16,13 @@ from pydantic import BaseModel
 from app.config import settings
 from app.core.deps import (
     get_cost_service,
+    get_current_user,
     get_entra_id_service,
     get_policy_service,
     get_resource_manager_service,
     get_subscription_service,
     get_storage_service,
-     require_admin,
+    require_admin,
 )
 from app.exceptions import InvalidInputError, NotFoundError
 from app.models import (
@@ -184,6 +185,7 @@ async def list_workshops(
             estimated_cost = cost_data.get("total_cost", 0.0)
             currency = cost_data.get("currency", "USD")
 
+        policy = workshop.get("policy", {})
         return WorkshopResponse(
             id=workshop["id"],
             name=workshop["name"],
@@ -194,6 +196,9 @@ async def list_workshops(
             created_at=workshop.get("created_at", ""),
             estimated_cost=estimated_cost,
             currency=currency,
+            created_by=workshop.get("created_by"),
+            description=workshop.get("description"),
+            allowed_regions=policy.get("allowed_regions", []),
         )
 
     return await asyncio.gather(*[_enrich_workshop(w) for w in workshops])
@@ -382,7 +387,9 @@ async def create_workshop(
     allowed_regions: str = Form(...),
     denied_services: str = Form(default=""),
     participants_file: UploadFile = File(...),
+    description: str = Form(default=""),
     survey_url: Optional[str] = Form(default=None, description="M365 Forms 만족도 조사 URL"),
+    user=Depends(get_current_user),
     storage=Depends(get_storage_service),
     entra_id=Depends(get_entra_id_service),
     resource_mgr=Depends(get_resource_manager_service),
@@ -507,6 +514,8 @@ async def create_workshop(
             "policy": {"allowed_regions": regions, "denied_services": services},
             "status": "active",
             "created_at": datetime.now(UTC).isoformat(),
+            "created_by": user.get("name", "") if user else "",
+            "description": description or "",
             "survey_url": survey_url or "",
         }
         await storage.save_workshop_metadata(workshop_id, metadata)
