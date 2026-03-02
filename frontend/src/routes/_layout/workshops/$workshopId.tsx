@@ -24,6 +24,7 @@ import {
   UserX,
   FolderX,
   ChevronDown,
+  Cpu,
 } from "lucide-react"
 
 import { workshopApi, type Participant, type AzureResource, type CostBreakdown, type DeletionFailure, type SubscriptionInfo } from "@/client"
@@ -201,6 +202,62 @@ function ResourceRow({ resource }: { resource: AzureResource }) {
         </div>
       </div>
     </div>
+  )
+}
+
+/** VM SKU 정책 정보를 카드 형태로 표시한다. 프리셋 이름을 기본 노출하고, SKU 목록은 토글로 접어둔다. */
+function VmSkuPolicyCard({ policy }: { policy?: { allowed_vm_skus?: string[]; vm_sku_preset?: string; denied_services?: string[] } }) {
+  const [isOpen, setIsOpen] = useState(false)
+  const skus = policy?.allowed_vm_skus || []
+  const preset = policy?.vm_sku_preset
+  const isVmDenied = policy?.denied_services?.includes("Microsoft.Compute/virtualMachines")
+
+  const presetLabels: Record<string, string> = {
+    "basic-lab": "Basic Lab",
+    "ai-ml": "AI/ML Workshop",
+  }
+
+  const displayLabel = isVmDenied
+    ? "VM 차단됨"
+    : preset
+      ? presetLabels[preset] || preset
+      : skus.length > 0
+        ? `커스텀 (${skus.length}개)`
+        : "제한 없음"
+
+  return (
+    <Card className="flex items-center">
+      <CardContent className="py-4 w-full">
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center gap-2 text-muted-foreground">
+            <Cpu className="h-4 w-4" />
+            <span className="text-sm">VM 크기 제한</span>
+          </div>
+          {skus.length > 0 ? (
+            <Collapsible open={isOpen} onOpenChange={setIsOpen}>
+              <CollapsibleTrigger className="flex items-center gap-1 group">
+                <p className="text-xl font-semibold">{displayLabel}</p>
+                <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${isOpen ? "rotate-180" : ""}`} />
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <div className="flex flex-wrap gap-1 mt-2">
+                  {skus.map((sku) => (
+                    <span
+                      key={sku}
+                      className="inline-flex items-center px-1.5 py-0.5 rounded text-xs bg-muted text-muted-foreground"
+                    >
+                      {sku}
+                    </span>
+                  ))}
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
+          ) : (
+            <p className="text-xl font-semibold">{displayLabel}</p>
+          )}
+        </div>
+      </CardContent>
+    </Card>
   )
 }
 
@@ -807,7 +864,7 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
         </div>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-5">
         <Card className="flex items-center">
           <CardContent className="py-4 w-full">
             <div className="flex flex-col gap-2">
@@ -846,6 +903,7 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
             </div>
           </CardContent>
         </Card>
+        <VmSkuPolicyCard policy={workshop.policy} />
         <Card className="flex items-center">
           <CardContent className="py-4 w-full">
             <div className="flex flex-col gap-2">

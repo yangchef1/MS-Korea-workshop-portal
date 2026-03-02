@@ -1,10 +1,10 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, useMemo } from "react"
 import { ArrowLeft, ChevronDown, Upload, Plus, Trash2, X } from "lucide-react"
 import { Link } from "@tanstack/react-router"
 
-import { workshopApi, type CreateWorkshopRequest } from "@/client"
+import { workshopApi, type CreateWorkshopRequest, type VmSkuPresets } from "@/client"
 import useAuth from "@/hooks/useAuth"
 import { Button } from "@/components/ui/button"
 import {
@@ -53,6 +53,8 @@ function CreateWorkshop() {
 
   const [selectedRegions, setSelectedRegions] = useState<string[]>(["koreacentral"])
   const [selectedServices, setSelectedServices] = useState<string[]>([])
+  const [selectedPreset, setSelectedPreset] = useState<string>("")
+  const [selectedVmSkus, setSelectedVmSkus] = useState<string[]>([])
   const [participants, setParticipants] = useState<ParticipantInput[]>([
     { email: "" },
   ])
@@ -87,6 +89,32 @@ function CreateWorkshop() {
     queryFn: workshopApi.getResourceTypes,
     enabled: isAuthenticated,
   })
+
+  const { data: vmSkuPresets } = useQuery({
+    queryKey: ["vm-sku-presets"],
+    queryFn: workshopApi.getVmSkuPresets,
+    enabled: isAuthenticated,
+  })
+
+  const { data: vmSkus = [] } = useQuery({
+    queryKey: ["vm-skus", selectedRegions[0]],
+    queryFn: () => workshopApi.getVmSkus(selectedRegions[0]),
+    enabled: isAuthenticated && selectedRegions.length > 0,
+  })
+
+  // VM 리소스 차단 시 VM SKU 선택 비활성화
+  const isVmBlocked = useMemo(
+    () => selectedServices.includes("Microsoft.Compute/virtualMachines"),
+    [selectedServices]
+  )
+
+  // VM 리소스 차단 시 SKU 선택 초기화
+  useEffect(() => {
+    if (isVmBlocked) {
+      setSelectedPreset("")
+      setSelectedVmSkus([])
+    }
+  }, [isVmBlocked])
 
   // API 데이터 도착 시 default 선택을 실제 리소스 타입에 맞춰 동기화
   const hasInitializedDefaults = useRef(false)
@@ -153,6 +181,8 @@ function CreateWorkshop() {
       base_resources_template: formData.infra_template || "none",
       allowed_regions: selectedRegions.join(","),
       denied_services: selectedServices.join(","),
+      allowed_vm_skus: selectedVmSkus.length > 0 ? selectedVmSkus.join(",") : undefined,
+      vm_sku_preset: selectedPreset || undefined,
       participants_file: csvFile,
       survey_url: formData.survey_url || undefined,
       description: formData.description || undefined,
@@ -365,6 +395,90 @@ function CreateWorkshop() {
               <p className="text-xs text-muted-foreground">
                 워크샵에서 차단할 Azure 리소스를 선택하세요. 선택하지 않으면 모든 리소스가 허용됩니다.
               </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="vm_sku_preset">VM 크기 제한</Label>
+              {isVmBlocked ? (
+                <p className="text-sm text-muted-foreground italic">
+                  VM이 차단되어 있어 VM 크기 제한을 설정할 수 없습니다.
+                </p>
+              ) : (
+                <>
+                  <select
+                    id="vm_sku_preset"
+                    value={selectedPreset}
+                    onChange={(e) => {
+                      const preset = e.target.value
+                      setSelectedPreset(preset)
+                      if (preset && vmSkuPresets?.[preset]) {
+                        setSelectedVmSkus(vmSkuPresets[preset].skus)
+                      } else {
+                        setSelectedVmSkus([])
+                      }
+                    }}
+                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring text-muted-foreground"
+                  >
+                    <option value="">제한 없음 (모든 VM 크기 허용)</option>
+                    {vmSkuPresets && Object.entries(vmSkuPresets).map(([key, preset]) => (
+                      <option key={key} value={key}>
+                        {preset.label} — {preset.description}
+                      </option>
+                    ))}
+                  </select>
+
+                  {selectedVmSkus.length > 0 && (
+                    <div className="flex flex-wrap gap-2 mt-2">
+                      {selectedVmSkus.map((sku) => (
+                        <span
+                          key={sku}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-primary/10 text-primary text-sm"
+                        >
+                          {sku}
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setSelectedVmSkus(
+                                selectedVmSkus.filter((s) => s !== sku)
+                              )
+                            }
+                            className="hover:bg-primary/20 rounded-full p-0.5"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="flex gap-2 mt-2">
+                    <select
+                      value=""
+                      onChange={(e) => {
+                        const value = e.target.value
+                        if (value && !selectedVmSkus.includes(value)) {
+                          setSelectedVmSkus([...selectedVmSkus, value])
+                          if (selectedPreset) setSelectedPreset("")
+                        }
+                      }}
+                      className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring text-muted-foreground"
+                    >
+                      <option value="">커스텀 SKU 추가...</option>
+                      {vmSkus
+                        .filter((sku) => !selectedVmSkus.includes(sku.name))
+                        .map((sku) => (
+                          <option key={sku.name} value={sku.name}>
+                            {sku.name} ({sku.vcpus}vCPU, {sku.memory_gb}GB)
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+
+                  <p className="text-xs text-muted-foreground">
+                    프리셋을 선택하거나 직접 허용할 VM SKU를 추가하세요. 미선택 시 모든 VM 크기가 허용됩니다.
+                  </p>
+                </>
+              )}
             </div>
 
             <div className="grid gap-4 md:grid-cols-2">
