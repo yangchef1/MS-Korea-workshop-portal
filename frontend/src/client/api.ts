@@ -525,10 +525,10 @@ export const workshopApi = {
   },
 }
 
-export const subscriptionAdminApi = {
+export const subscriptionApi = {
   get: async (refresh = false): Promise<SubscriptionSettingsResponse> => {
     const response = await apiClient.get<SubscriptionSettingsResponse>(
-      "/admin/subscriptions",
+      "/subscriptions",
       { params: { refresh } }
     )
     return response.data
