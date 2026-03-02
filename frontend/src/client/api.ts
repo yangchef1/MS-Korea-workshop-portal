@@ -269,11 +269,13 @@ export interface Workshop {
     allowed_regions: string[]
     denied_services: string[]
   }
+  allowed_regions?: string[]
   start_date: string
   end_date: string
   participants?: Participant[]
   participant_count?: number
   created_at: string
+  created_by?: string
   updated_at?: string
   survey_url?: string
   available_subscriptions?: SubscriptionInfo[]
@@ -383,6 +385,7 @@ export interface CreateWorkshopRequest {
   denied_services: string  // comma-separated
   participants_file: File
   survey_url?: string
+  description?: string
 }
 
 // API Error type
@@ -422,6 +425,9 @@ export const workshopApi = {
     formData.append("participants_file", data.participants_file)
     if (data.survey_url) {
       formData.append("survey_url", data.survey_url)
+    }
+    if (data.description) {
+      formData.append("description", data.description)
     }
 
     const response = await apiClient.post<Workshop>("/workshops", formData, {
