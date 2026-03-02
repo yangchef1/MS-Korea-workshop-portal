@@ -41,6 +41,7 @@ function CreateWorkshop() {
     end_date: "",
     infra_template: "",
     survey_url: "",
+    description: "",
   })
 
   const [selectedServices, setSelectedServices] = useState<string[]>([])
@@ -132,6 +133,7 @@ function CreateWorkshop() {
       denied_services: selectedServices.join(","),
       participants_file: csvFile,
       survey_url: formData.survey_url || undefined,
+      description: formData.description || undefined,
     })
   }
 
@@ -233,6 +235,20 @@ function CreateWorkshop() {
                   ))}
                 </select>
               </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="description">워크샵 설명 (선택)</Label>
+              <textarea
+                id="description"
+                value={formData.description}
+                onChange={(e) =>
+                  setFormData({ ...formData, description: e.target.value })
+                }
+                placeholder="예: Azure 기초 워크샵으로 VM, Storage, Network 등을 다룹니다."
+                rows={2}
+                className="flex w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring resize-none"
+              />
             </div>
 
             <div className="space-y-2">

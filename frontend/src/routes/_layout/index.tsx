@@ -12,6 +12,7 @@ import {
   Monitor,
   CheckCircle2,
   Shield,
+  User,
 } from "lucide-react"
 
 import { workshopApi, subscriptionApi, type Workshop } from "@/client"
@@ -45,6 +46,19 @@ function WorkshopCard({ workshop }: { workshop: Workshop }) {
     deleted: "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300",
   }
 
+  const regions = workshop.allowed_regions ?? workshop.policy?.allowed_regions ?? []
+  const regionDisplay = regions.length > 2
+    ? `${regions.slice(0, 2).join(", ")} +${regions.length - 2}`
+    : regions.join(", ") || workshop.region
+
+  const formatDate = (dateStr: string) =>
+    new Date(dateStr).toLocaleString("ko-KR", {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    })
+
   return (
     <Link to="/workshops/$workshopId" params={{ workshopId: workshop.id }}>
       <Card className="hover:shadow-md transition-shadow cursor-pointer">
@@ -60,21 +74,31 @@ function WorkshopCard({ workshop }: { workshop: Workshop }) {
               {workshop.status}
             </span>
           </div>
-          <CardDescription>{workshop.description}</CardDescription>
+          {workshop.description && (
+            <CardDescription>{workshop.description}</CardDescription>
+          )}
         </CardHeader>
         <CardContent>
           <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
-            <div className="flex items-center gap-1">
-              <MapPin className="h-4 w-4" />
-              {workshop.region}
-            </div>
+            {workshop.created_by && (
+              <div className="flex items-center gap-1">
+                <User className="h-4 w-4" />
+                {workshop.created_by}
+              </div>
+            )}
+            {regionDisplay && (
+              <div className="flex items-center gap-1">
+                <MapPin className="h-4 w-4" />
+                {regionDisplay}
+              </div>
+            )}
             <div className="flex items-center gap-1">
               <Users className="h-4 w-4" />
               {workshop.participant_count ?? workshop.participants?.length ?? 0} 참가자
             </div>
             <div className="flex items-center gap-1">
               <Calendar className="h-4 w-4" />
-              {new Date(workshop.start_date).toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+              {formatDate(workshop.start_date)} ~ {formatDate(workshop.end_date)}
             </div>
           </div>
         </CardContent>
