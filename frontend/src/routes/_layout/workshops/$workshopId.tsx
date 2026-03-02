@@ -259,28 +259,30 @@ function ResourcesList({ workshopId, refetch, isRefetching }: { workshopId: stri
           {Object.entries(groupedResources).map(([participant, resources]) => {
             const resourceGroup = resources[0]?.resource_group || ""
             return (
-              <Collapsible key={participant} defaultOpen={defaultOpen}>
-                <CollapsibleTrigger className="flex items-center justify-between w-full p-3 rounded-lg border bg-muted/30 hover:bg-muted/50 transition-colors group">
-                  <div className="flex items-center gap-2">
-                    <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform group-data-[state=closed]:-rotate-90" />
-                    <Users className="h-4 w-4 text-muted-foreground" />
-                    <span className="font-medium">{participant}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {resourceGroup}
+              <div key={participant} className="rounded-lg border overflow-hidden">
+                <Collapsible defaultOpen={defaultOpen}>
+                  <CollapsibleTrigger className="flex items-center justify-between w-full p-3 bg-muted/30 hover:bg-muted/50 transition-colors group">
+                    <div className="flex items-center gap-2">
+                      <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform group-data-[state=closed]:-rotate-90" />
+                      <Users className="h-4 w-4 text-muted-foreground" />
+                      <span className="font-medium">{participant}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {resourceGroup}
+                      </span>
+                    </div>
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary">
+                      {resources.length}개
                     </span>
-                  </div>
-                  <span className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary">
-                    {resources.length}개
-                  </span>
-                </CollapsibleTrigger>
-                <CollapsibleContent>
-                  <div className="space-y-2 mt-2 ml-4">
-                    {resources.map((resource) => (
-                      <ResourceRow key={resource.id} resource={resource} />
-                    ))}
-                  </div>
-                </CollapsibleContent>
-              </Collapsible>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent className="border-t bg-background">
+                    <div className="space-y-2 p-3">
+                      {resources.map((resource) => (
+                        <ResourceRow key={resource.id} resource={resource} />
+                      ))}
+                    </div>
+                  </CollapsibleContent>
+                </Collapsible>
+              </div>
             )
           })}
         </div>

@@ -6,7 +6,6 @@ import {
   Plus,
   Calendar,
   Users,
-  MapPin,
   AlertCircle,
   Info,
   Monitor,
@@ -46,11 +45,6 @@ function WorkshopCard({ workshop }: { workshop: Workshop }) {
     deleted: "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300",
   }
 
-  const regions = workshop.allowed_regions ?? workshop.policy?.allowed_regions ?? []
-  const regionDisplay = regions.length > 2
-    ? `${regions.slice(0, 2).join(", ")} +${regions.length - 2}`
-    : regions.join(", ") || workshop.region
-
   const formatDate = (dateStr: string) =>
     new Date(dateStr).toLocaleString("ko-KR", {
       month: "short",
@@ -84,12 +78,6 @@ function WorkshopCard({ workshop }: { workshop: Workshop }) {
               <div className="flex items-center gap-1">
                 <User className="h-4 w-4" />
                 {workshop.created_by}
-              </div>
-            )}
-            {regionDisplay && (
-              <div className="flex items-center gap-1">
-                <MapPin className="h-4 w-4" />
-                {regionDisplay}
               </div>
             )}
             <div className="flex items-center gap-1">
