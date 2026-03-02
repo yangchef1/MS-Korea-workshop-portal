@@ -7,12 +7,16 @@ import {
   SidebarProvider,
 } from "@/components/ui/sidebar"
 import { authApi } from "@/client"
+import { queryClient, queryKeys } from "@/lib/queryClient"
 
 export const Route = createFileRoute("/_layout")({
   component: Layout,
   beforeLoad: async () => {
     try {
-      await authApi.me()
+      await queryClient.fetchQuery({
+        queryKey: queryKeys.authMe,
+        queryFn: () => authApi.me(),
+      })
     } catch {
       // Redirect to login if not authenticated
       throw redirect({

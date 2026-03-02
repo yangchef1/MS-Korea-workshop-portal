@@ -1,58 +1,35 @@
 /**
  * Authentication hook wrapper for MSAL.
- * Fetches user role from backend on authentication.
+ *
+ * Reads the user role from the React Query cache populated by
+ * the _layout route guard's `beforeLoad`, avoiding a duplicate
+ * `GET /api/auth/me` request.
  */
-import { useEffect, useMemo, useState } from "react"
+import { useMemo } from "react"
+import { useQuery } from "@tanstack/react-query"
 import { useMsalAuth, type MsalUser } from "./useMsalAuth"
-import { authApi, type UserRole } from "@/client/api"
+import { authApi } from "@/client/api"
+import { queryKeys } from "@/lib/queryClient"
 
 export type User = MsalUser
 
 export const useAuth = () => {
   const { user, isAuthenticated, isLoading, login, logout, getAccessToken } = useMsalAuth()
-  const [role, setRole] = useState<UserRole | null>(null)
-  const [roleLoading, setRoleLoading] = useState(false)
 
-  useEffect(() => {
-    if (!isAuthenticated || !user) {
-      setRole(null)
-      return
-    }
-
-    let cancelled = false
-    setRoleLoading(true)
-
-    authApi
-      .me()
-      .then((data) => {
-        if (!cancelled) {
-          setRole(data.role || "user")
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setRole(null)
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setRoleLoading(false)
-        }
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [isAuthenticated, user?.user_id])
+  const { data: meData, isLoading: meLoading } = useQuery({
+    queryKey: queryKeys.authMe,
+    queryFn: () => authApi.me(),
+    enabled: isAuthenticated && !!user,
+  })
 
   const enrichedUser: MsalUser | null = useMemo(() => {
     if (!user) return null
-    return { ...user, role }
-  }, [user, role])
+    return { ...user, role: meData?.role ?? null }
+  }, [user, meData?.role])
 
   return {
     user: enrichedUser,
-    isLoading: isLoading || roleLoading,
+    isLoading: isLoading || meLoading,
     error: null,
     isAuthenticated,
     logout,
