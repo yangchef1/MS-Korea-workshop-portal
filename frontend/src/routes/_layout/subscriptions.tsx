@@ -3,7 +3,7 @@ import { useMemo } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { RefreshCw, Lock } from "lucide-react"
 
-import { subscriptionAdminApi } from "@/client"
+import { subscriptionApi } from "@/client"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -12,45 +12,34 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import useAuth from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
 
 export const Route = createFileRoute("/_layout/subscriptions")({
-  component: SubscriptionAdminPage,
+  component: SubscriptionPage,
 })
 
-function SubscriptionAdminPage() {
-  const { user } = useAuth()
+function SubscriptionPage() {
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
 
   const { data, isLoading, isRefetching } = useQuery({
-    queryKey: ["admin-subscriptions"],
-    queryFn: () => subscriptionAdminApi.get(),
+    queryKey: ["subscriptions"],
+    queryFn: () => subscriptionApi.get(),
   })
 
   const availableSubs = useMemo(() => data?.subscriptions || [], [data])
   const inUseMap: Record<string, string> = useMemo(() => data?.in_use_map || {}, [data])
 
   const refreshMutation = useMutation({
-    mutationFn: () => subscriptionAdminApi.get(true),
+    mutationFn: () => subscriptionApi.get(true),
     onSuccess: (result) => {
-      queryClient.setQueryData(["admin-subscriptions"], result)
+      queryClient.setQueryData(["subscriptions"], result)
       showSuccessToast("구독 목록을 새로고침했습니다")
     },
     onError: () => {
       showErrorToast("구독 새로고침에 실패했습니다")
     },
   })
-
-  if (user?.role !== "admin") {
-    return (
-      <div className="space-y-2">
-        <h1 className="text-xl font-semibold">구독 관리</h1>
-        <p className="text-muted-foreground">관리자만 접근할 수 있습니다.</p>
-      </div>
-    )
-  }
 
   if (isLoading) {
     return (
