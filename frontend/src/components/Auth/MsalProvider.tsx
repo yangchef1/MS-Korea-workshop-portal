@@ -19,6 +19,11 @@ export function MsalProvider({ children }: Props) {
         // Initialize MSAL
         await msalInstance.initialize()
 
+        // Wake up the backend container while MSAL processes the redirect.
+        // Uses no-cors to avoid CORS preflight; we only care about triggering the container start.
+        const apiBase = (import.meta.env.VITE_API_BASE_URL || "/api").replace(/\/api\/?$/, "")
+        fetch(`${apiBase}/health`, { mode: "no-cors" }).catch(() => {})
+
         // Handle redirect promise (for redirect flow)
         const response = await msalInstance.handleRedirectPromise()
         if (response) {
