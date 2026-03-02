@@ -5,7 +5,6 @@ azure.data.tables.aio를 사용하여 진정한 비동기 I/O를 제공한다.
 
 Tables:
 - workshops: 워크샵 메타데이터 (PartitionKey="workshop", RowKey=workshop_id)
-- passwords: 참가자 비밀번호 CSV (PartitionKey="password", RowKey=workshop_id)
 - templates: ARM 템플릿 (PartitionKey="template", RowKey=template_name)
 """
 import json
@@ -30,14 +29,12 @@ from app.models import DeletionFailureItem, WorkshopMetadata
 logger = logging.getLogger(__name__)
 
 WORKSHOPS_TABLE = "workshops"
-PASSWORDS_TABLE = "passwords"
 TEMPLATES_TABLE = "templates"
 USERS_TABLE = "users"
 DELETION_FAILURES_TABLE = "deletionfailures"
 PORTAL_SETTINGS_TABLE = "portalsettings"
 
 WORKSHOP_PARTITION_KEY = "workshop"
-PASSWORD_PARTITION_KEY = "password"
 TEMPLATE_PARTITION_KEY = "template"
 USER_PARTITION_KEY = "user"
 PORTAL_SETTINGS_PARTITION_KEY = "config"
@@ -99,7 +96,6 @@ class StorageService:
             return
         for table_name in (
             WORKSHOPS_TABLE,
-            PASSWORDS_TABLE,
             TEMPLATES_TABLE,
             USERS_TABLE,
             DELETION_FAILURES_TABLE,
@@ -214,7 +210,7 @@ class StorageService:
             raise
 
     async def delete_workshop_metadata(self, workshop_id: str) -> bool:
-        """워크샵 메타데이터와 관련 비밀번호를 삭제한다.
+        """워크샵 메타데이터를 삭제한다.
 
         Args:
             workshop_id: 워크샵 고유 식별자.
@@ -234,78 +230,10 @@ class StorageService:
                 row_key=workshop_id,
             )
 
-            try:
-                passwords_client = self.table_service_client.get_table_client(
-                    PASSWORDS_TABLE
-                )
-                await passwords_client.delete_entity(
-                    partition_key=PASSWORD_PARTITION_KEY,
-                    row_key=workshop_id,
-                )
-            except ResourceNotFoundError:
-                pass
-
             logger.info("Deleted workshop: %s", workshop_id)
             return True
         except Exception as e:
             logger.error("Failed to delete workshop: %s", e)
-            raise
-
-    # ------------------------------------------------------------------
-    # Passwords CSV
-    # ------------------------------------------------------------------
-
-    async def save_passwords_csv(self, workshop_id: str, csv_content: str) -> bool:
-        """참가자 비밀번호 CSV를 테이블 엔티티로 저장한다.
-
-        Args:
-            workshop_id: 워크샵 고유 식별자.
-            csv_content: CSV 문자열.
-
-        Returns:
-            성공 시 True.
-        """
-
-        await self._ensure_tables_exist()
-
-        try:
-            table_client = self.table_service_client.get_table_client(PASSWORDS_TABLE)
-            entity = {
-                "PartitionKey": PASSWORD_PARTITION_KEY,
-                "RowKey": workshop_id,
-                "csv_content": csv_content,
-            }
-            await table_client.upsert_entity(entity)
-            logger.info("Saved passwords CSV: %s", workshop_id)
-            return True
-        except Exception as e:
-            logger.error("Failed to save passwords CSV: %s", e)
-            raise
-
-    async def get_passwords_csv(self, workshop_id: str) -> str | None:
-        """비밀번호 CSV를 조회한다.
-
-        Args:
-            workshop_id: 워크샵 고유 식별자.
-
-        Returns:
-            CSV 문자열. 존재하지 않으면 None.
-        """
-
-        await self._ensure_tables_exist()
-
-        try:
-            table_client = self.table_service_client.get_table_client(PASSWORDS_TABLE)
-            entity = await table_client.get_entity(
-                partition_key=PASSWORD_PARTITION_KEY,
-                row_key=workshop_id,
-            )
-            return entity.get("csv_content", "")
-        except ResourceNotFoundError:
-            logger.warning("Passwords CSV not found: %s", workshop_id)
-            return None
-        except Exception as e:
-            logger.error("Failed to retrieve passwords CSV: %s", e)
             raise
 
     # ------------------------------------------------------------------

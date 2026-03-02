@@ -9,14 +9,13 @@ import uuid
 from datetime import UTC, datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
 
 from app.config import settings
 from app.core.deps import (
     get_cost_service,
-    get_email_service,
     get_entra_id_service,
     get_policy_service,
     get_resource_manager_service,
@@ -108,15 +107,6 @@ class ResourceType(BaseModel):
     value: str
     label: str
     category: str
-
-
-class EmailSendResponse(BaseModel):
-    """이메일 전송 결과."""
-
-    total: int
-    sent: int
-    failed: int
-    results: dict
 
 
 class ParticipantSubscriptionUpdate(BaseModel):
@@ -372,7 +362,6 @@ async def _setup_participant(
 
         return {
             "alias": user["alias"],
-            "email": user.get("email", ""),
             "upn": user["upn"],
             "password": user["password"],
             "subscription_id": subscription_id,
@@ -454,10 +443,8 @@ async def create_workshop(
             raise InvalidInputError("Failed to create any Entra ID users")
         created_users = user_results
 
-        alias_to_email = {p["alias"]: p["email"] for p in participants}
         alias_to_sub = {p["alias"]: p["subscription_id"] for p in participants}
         for user in user_results:
-            user["email"] = alias_to_email.get(user["alias"], "")
             user["subscription_id"] = alias_to_sub.get(user["alias"], "")
 
         # Step 2: 리소스 그룹 생성
@@ -523,9 +510,6 @@ async def create_workshop(
             "survey_url": survey_url or "",
         }
         await storage.save_workshop_metadata(workshop_id, metadata)
-
-        csv_content = generate_passwords_csv(successful_participants)
-        await storage.save_passwords_csv(workshop_id, csv_content)
 
         logger.info("Workshop created: %s", workshop_id)
 
@@ -896,13 +880,20 @@ async def download_passwords(
     workshop_id: str,
     storage=Depends(get_storage_service),
 ):
-    """참가자 비밀번호 CSV 파일을 다운로드한다."""
-    csv_content = await storage.get_passwords_csv(workshop_id)
-    if not csv_content:
+    """참가자 계정 정보 CSV 파일을 다운로드한다.
+
+    메타데이터의 participants에서 실시간으로 CSV를 생성한다.
+    개인 이메일은 포함하지 않는다 (컴플라이언스).
+    """
+    metadata = await _get_workshop_or_raise(storage, workshop_id)
+    participants = metadata.get("participants", [])
+    if not participants:
         raise NotFoundError(
-            f"Passwords file for workshop '{workshop_id}' not found",
-            resource_type="PasswordsCSV",
+            f"No participants found for workshop '{workshop_id}'",
+            resource_type="Participants",
         )
+
+    csv_content = generate_passwords_csv(participants)
 
     return Response(
         content=csv_content,
@@ -973,61 +964,8 @@ async def get_workshop_cost(
     return CostResponse(**cost_data)
 
 
-@router.post("/{workshop_id}/send-credentials", response_model=EmailSendResponse)
-async def send_credentials_email(
-    workshop_id: str,
-    participant_emails: Optional[list[str]] = Query(
-        default=None,
-        description="전송 대상 참가자 이메일. 미지정 시 전체 참가자에게 전송.",
-    ),
-    storage=Depends(get_storage_service),
-    email=Depends(get_email_service),
-):
-    """워크샵 참가자에게 자격 증명 이메일을 전송한다."""
-    metadata = await _get_workshop_or_raise(storage, workshop_id)
-
-    workshop_name = metadata.get("name", "Azure Workshop")
-    all_participants = metadata.get("participants", [])
-
-    if participant_emails:
-        lower_emails = {e.lower() for e in participant_emails}
-        participants_to_send = [
-            p for p in all_participants
-            if p.get("email", "").lower() in lower_emails
-        ]
-        if not participants_to_send:
-            raise InvalidInputError(
-                "No matching participants found for provided emails"
-            )
-    else:
-        participants_to_send = all_participants
-
-    participants_with_email = [p for p in participants_to_send if p.get("email")]
-    if not participants_with_email:
-        raise InvalidInputError(
-            "No participants have email addresses configured"
-        )
-
-    results = await email.send_credentials_bulk(
-        participants_with_email, workshop_name
-    )
-
-    sent_count = sum(1 for v in results.values() if v)
-    failed_count = len(results) - sent_count
-
-    logger.info(
-        "Sent credentials for workshop %s: %d sent, %d failed",
-        workshop_id,
-        sent_count,
-        failed_count,
-    )
-
-    return EmailSendResponse(
-        total=len(results),
-        sent=sent_count,
-        failed=failed_count,
-        results=results,
-    )
+# send-credentials endpoint removed: personal emails are no longer stored
+# (compliance). Credential emails are sent in-memory during workshop creation only.
 
 
 @router.patch("/{workshop_id}/survey-url", response_model=MessageResponse)
@@ -1049,64 +987,5 @@ async def update_survey_url(
     )
 
 
-@router.post("/{workshop_id}/send-survey", response_model=EmailSendResponse)
-async def send_survey_email(
-    workshop_id: str,
-    participant_emails: Optional[list[str]] = Query(
-        default=None,
-        description="전송 대상 참가자 이메일. 미지정 시 전체 참가자에게 전송.",
-    ),
-    storage=Depends(get_storage_service),
-    email=Depends(get_email_service),
-):
-    """워크샵 참가자에게 만족도 조사 이메일을 전송한다."""
-    metadata = await _get_workshop_or_raise(storage, workshop_id)
-
-    survey_url = metadata.get("survey_url", "")
-    if not survey_url:
-        raise InvalidInputError(
-            f"Workshop '{workshop_id}' does not have a survey URL configured"
-        )
-
-    workshop_name = metadata.get("name", "Azure Workshop")
-    all_participants = metadata.get("participants", [])
-
-    if participant_emails:
-        lower_emails = {e.lower() for e in participant_emails}
-        participants_to_send = [
-            p for p in all_participants
-            if p.get("email", "").lower() in lower_emails
-        ]
-        if not participants_to_send:
-            raise InvalidInputError(
-                "No matching participants found for provided emails"
-            )
-    else:
-        participants_to_send = all_participants
-
-    participants_with_email = [p for p in participants_to_send if p.get("email")]
-    if not participants_with_email:
-        raise InvalidInputError(
-            "No participants have email addresses configured"
-        )
-
-    results = await email.send_survey_bulk(
-        participants_with_email, workshop_name, survey_url
-    )
-
-    sent_count = sum(1 for v in results.values() if v)
-    failed_count = len(results) - sent_count
-
-    logger.info(
-        "Sent survey for workshop %s: %d sent, %d failed",
-        workshop_id,
-        sent_count,
-        failed_count,
-    )
-
-    return EmailSendResponse(
-        total=len(results),
-        sent=sent_count,
-        failed=failed_count,
-        results=results,
-    )
+# send-survey endpoint removed: personal emails are no longer stored
+# (compliance). Survey links should be shared through other channels.

@@ -43,7 +43,6 @@ class ParticipantResponse(BaseModel):
     """자격 증명이 포함된 참가자 응답."""
 
     alias: str
-    email: str
     upn: str
     password: str
     subscription_id: str
@@ -98,7 +97,6 @@ class ParticipantData(BaseModel):
     """워크샵 메타데이터에 저장되는 참가자 데이터."""
 
     alias: str
-    email: str
     upn: str
     password: str
     subscription_id: str = ""  # Default empty for backward compatibility; service layer falls back to default sub

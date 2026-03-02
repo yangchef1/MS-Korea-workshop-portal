@@ -45,11 +45,9 @@ def get_resource_client(
     return _resource_clients[subscription_id]
 
 WORKSHOPS_TABLE = "workshops"
-PASSWORDS_TABLE = "passwords"
 DELETION_FAILURES_TABLE = "deletionfailures"
 PORTAL_SETTINGS_TABLE = "portalsettings"
 WORKSHOP_PARTITION_KEY = "workshop"
-PASSWORD_PARTITION_KEY = "password"
 PORTAL_SETTINGS_PARTITION_KEY = "config"
 PORTAL_SETTINGS_ROW_KEY_SUBSCRIPTIONS = "subscriptions"
 
@@ -80,7 +78,6 @@ async def workshop_cleanup(timer: func.TimerRequest) -> None:
             credential=credential
         )
         workshops_table = table_service_client.get_table_client(WORKSHOPS_TABLE)
-        passwords_table = table_service_client.get_table_client(PASSWORDS_TABLE)
         failures_table = table_service_client.get_table_client(DELETION_FAILURES_TABLE)
 
         resource_client = ResourceManagementClient(
@@ -128,7 +125,6 @@ async def workshop_cleanup(timer: func.TimerRequest) -> None:
                 credential,
                 graph_client,
                 workshops_table,
-                passwords_table,
                 failures_table,
             )
             cleanup_results.append(result)
@@ -164,7 +160,6 @@ async def cleanup_workshop(
     credential: DefaultAzureCredential,
     graph_client: GraphServiceClient,
     workshops_table,
-    passwords_table,
     failures_table,
 ) -> dict:
     """
@@ -178,7 +173,6 @@ async def cleanup_workshop(
         credential: Azure credential for creating per-sub clients.
         graph_client: Microsoft Graph client.
         workshops_table: Table client for workshops table.
-        passwords_table: Table client for passwords table.
         failures_table: Table client for deletionfailures table.
 
     Returns:
@@ -308,15 +302,6 @@ async def cleanup_workshop(
                     row_key=workshop_id,
                 )
                 logger.info(f"Deleted workshop metadata: {workshop_id}")
-
-                try:
-                    passwords_table.delete_entity(
-                        partition_key=PASSWORD_PARTITION_KEY,
-                        row_key=workshop_id,
-                    )
-                    logger.info(f"Deleted passwords entity: {workshop_id}")
-                except Exception as e:
-                    logger.warning(f"Failed to delete passwords entity: {e}")
 
             except Exception as e:
                 logger.error(f"Failed to delete workshop metadata: {e}")
