@@ -55,6 +55,7 @@ class PolicySettings(BaseModel):
 
     allowed_regions: list[str] = Field(..., min_length=1)
     denied_services: list[str] = Field(default_factory=list)
+    allowed_vm_skus: list[str] = Field(default_factory=list)
 
 
 class WorkshopCreate(BaseModel):
@@ -123,6 +124,8 @@ class PolicyData(BaseModel):
 
     allowed_regions: list[str] = Field(..., min_length=1)
     denied_services: list[str] = Field(default_factory=list)
+    allowed_vm_skus: list[str] = Field(default_factory=list)
+    vm_sku_preset: Optional[str] = None
 
 
 WORKSHOP_VALID_STATUSES = {"active", "completed", "deleted", "failed"}
@@ -140,6 +143,7 @@ class WorkshopCreateInput(BaseModel):
     end_date: str = Field(..., min_length=1)
     allowed_regions: list[str] = Field(..., min_length=1)
     denied_services: list[str] = Field(default_factory=list)
+    allowed_vm_skus: list[str] = Field(default_factory=list)
 
 
 class WorkshopMetadata(BaseModel):

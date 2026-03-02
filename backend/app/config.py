@@ -130,6 +130,67 @@ class Settings(BaseSettings):
         ],
     }
 
+    # VM SKU 차단 리소스 충돌 감지용 상수
+    VM_RESOURCE_TYPE: str = "Microsoft.Compute/virtualMachines"
+
+    # VM SKU 프리셋: 프리셋 이름 → 허용 SKU 목록
+    VM_SKU_PRESETS: Dict[str, Dict] = {
+        "basic-lab": {
+            "label": "Basic Lab",
+            "description": "소형 VM만 허용 (GPU 차단)",
+            "skus": [
+                "Standard_B1s",
+                "Standard_B1ms",
+                "Standard_B2s",
+                "Standard_B2ms",
+                "Standard_B4ms",
+                "Standard_D2s_v3",
+                "Standard_D2s_v5",
+                "Standard_D4s_v3",
+                "Standard_D4s_v5",
+                "Standard_D2as_v4",
+                "Standard_D2as_v5",
+                "Standard_D4as_v4",
+                "Standard_D4as_v5",
+                "Standard_DS1_v2",
+                "Standard_DS2_v2",
+            ],
+        },
+        "ai-ml": {
+            "label": "AI/ML Workshop",
+            "description": "GPU VM 포함 (대형 인스턴스 제한)",
+            "skus": [
+                # Basic Lab SKUs
+                "Standard_B1s",
+                "Standard_B1ms",
+                "Standard_B2s",
+                "Standard_B2ms",
+                "Standard_B4ms",
+                "Standard_D2s_v3",
+                "Standard_D2s_v5",
+                "Standard_D4s_v3",
+                "Standard_D4s_v5",
+                "Standard_D2as_v4",
+                "Standard_D2as_v5",
+                "Standard_D4as_v4",
+                "Standard_D4as_v5",
+                "Standard_DS1_v2",
+                "Standard_DS2_v2",
+                # GPU SKUs
+                "Standard_NC4as_T4_v3",
+                "Standard_NC8as_T4_v3",
+                "Standard_NC16as_T4_v3",
+                "Standard_NC6s_v3",
+                "Standard_NC12s_v3",
+                "Standard_NC24s_v3",
+                "Standard_ND40rs_v2",
+                "Standard_NV6ads_A10_v5",
+                "Standard_NV12ads_A10_v5",
+                "Standard_NV18ads_A10_v5",
+            ],
+        },
+    }
+
     password_length: int = 16
 
     default_user_role: str = "Contributor"
