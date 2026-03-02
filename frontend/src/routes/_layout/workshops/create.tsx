@@ -1,7 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useState, useEffect, useRef } from "react"
-import { ArrowLeft, Upload, Plus, Trash2, X } from "lucide-react"
+import { ArrowLeft, ChevronDown, Upload, Plus, Trash2, X } from "lucide-react"
 import { Link } from "@tanstack/react-router"
 
 import { workshopApi, type CreateWorkshopRequest } from "@/client"
@@ -14,7 +14,14 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { Checkbox } from "@/components/ui/checkbox"
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import useCustomToast from "@/hooks/useCustomToast"
@@ -59,6 +66,15 @@ function CreateWorkshop() {
     { value: "westus2", label: "West US 2" },
     { value: "westcentralus", label: "West Central US (EUAP)" },
   ]
+  const selectedRegionLabels = regions
+    .filter((region) => selectedRegions.includes(region.value))
+    .map((region) => region.label)
+  const selectedRegionSummary =
+    selectedRegionLabels.length === 0
+      ? "허용 리전 선택"
+      : selectedRegionLabels.length <= 2
+        ? selectedRegionLabels.join(", ")
+        : `${selectedRegionLabels.slice(0, 2).join(", ")} 외 ${selectedRegionLabels.length - 2}개`
 
   const { data: templates = [], isLoading: isTemplatesLoading } = useQuery({
     queryKey: ["workshop-templates"],
@@ -227,42 +243,6 @@ function CreateWorkshop() {
             </div>
 
             <div className="space-y-2">
-              <Label>허용 Azure 리전 *</Label>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                {regions.map((region) => {
-                  const isSelected = selectedRegions.includes(region.value)
-                  return (
-                  <label
-                    key={region.value}
-                    className={`flex items-center gap-2 rounded-md border px-3 py-2 cursor-pointer transition-colors ${
-                      isSelected
-                        ? "border-primary bg-primary/5"
-                        : "border-input hover:bg-accent"
-                    }`}
-                  >
-                    <Checkbox
-                      checked={isSelected}
-                      onCheckedChange={(checked) => {
-                        setSelectedRegions((prev) =>
-                          checked === true
-                            ? prev.includes(region.value)
-                              ? prev
-                              : [...prev, region.value]
-                            : prev.filter((r) => r !== region.value)
-                        )
-                      }}
-                    />
-                    <span className="text-sm">{region.label}</span>
-                  </label>
-                  )
-                })}
-              </div>
-              <p className="text-xs text-muted-foreground">
-                참가자가 리소스를 생성할 수 있는 리전을 선택하세요. 최소 1개 필수.
-              </p>
-            </div>
-
-            <div className="space-y-2">
               <Label htmlFor="description">워크샵 설명 (선택)</Label>
               <textarea
                 id="description"
@@ -274,6 +254,57 @@ function CreateWorkshop() {
                 rows={2}
                 className="flex w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring resize-none"
               />
+            </div>
+
+            <div className="space-y-2">
+              <Label>허용 Azure 리전 *</Label>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full justify-between font-normal"
+                  >
+                    <span className="truncate text-left">{selectedRegionSummary}</span>
+                    <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent className="w-[320px]" align="start">
+                  <DropdownMenuLabel>허용 Azure 리전</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  {regions.map((region) => (
+                    <DropdownMenuCheckboxItem
+                      key={region.value}
+                      checked={selectedRegions.includes(region.value)}
+                      onSelect={(event) => event.preventDefault()}
+                      onCheckedChange={(checked) => {
+                        setSelectedRegions((prev) =>
+                          checked === true
+                            ? prev.includes(region.value)
+                              ? prev
+                              : [...prev, region.value]
+                            : prev.filter((r) => r !== region.value)
+                        )
+                      }}
+                    >
+                      {region.label}
+                    </DropdownMenuCheckboxItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <div className="flex flex-wrap gap-2">
+                {selectedRegionLabels.map((label) => (
+                  <span
+                    key={label}
+                    className="inline-flex items-center rounded-md bg-primary/10 px-2 py-1 text-xs text-primary"
+                  >
+                    {label}
+                  </span>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                참가자가 리소스를 생성할 수 있는 리전을 선택하세요. 최소 1개 필수.
+              </p>
             </div>
 
             <div className="space-y-2">
