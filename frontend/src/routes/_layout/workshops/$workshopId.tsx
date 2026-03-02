@@ -23,6 +23,7 @@ import {
   RotateCw,
   UserX,
   FolderX,
+  ChevronDown,
 } from "lucide-react"
 
 import { workshopApi, type Participant, type AzureResource, type CostBreakdown, type DeletionFailure, type SubscriptionInfo } from "@/client"
@@ -49,6 +50,11 @@ import {
 } from "@/components/ui/alert-dialog"
 import useCustomToast from "@/hooks/useCustomToast"
 import useAuth from "@/hooks/useAuth"
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible"
 
 function getWorkshopQueryOptions(workshopId: string) {
   return {
@@ -192,9 +198,6 @@ function ResourceRow({ resource }: { resource: AzureResource }) {
           <div className="text-sm text-muted-foreground">
             {getResourceTypeDisplay(resource.type)} · {resource.location}
           </div>
-          <div className="text-xs text-muted-foreground">
-            참가자: {resource.participant} · {resource.resource_group}
-          </div>
         </div>
       </div>
     </div>
@@ -206,6 +209,25 @@ function ResourcesList({ workshopId, refetch, isRefetching }: { workshopId: stri
     queryKey: ['workshop-resources', workshopId],
     queryFn: () => workshopApi.getResources(workshopId),
   })
+
+  const COLLAPSE_THRESHOLD = 5
+
+  // Group resources by participant
+  const groupedResources = useMemo(() => {
+    if (!data?.resources) return {}
+    return data.resources.reduce<Record<string, AzureResource[]>>(
+      (groups, resource) => {
+        const key = resource.participant || "unknown"
+        if (!groups[key]) groups[key] = []
+        groups[key].push(resource)
+        return groups
+      },
+      {},
+    )
+  }, [data?.resources])
+
+  const participantCount = Object.keys(groupedResources).length
+  const defaultOpen = participantCount <= COLLAPSE_THRESHOLD
 
   if (isLoading) {
     return (
@@ -220,7 +242,7 @@ function ResourcesList({ workshopId, refetch, isRefetching }: { workshopId: stri
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">
-          총 {data?.total_count || 0}개의 리소스
+          총 {data?.total_count || 0}개의 리소스 · {participantCount}명의 참가자
         </p>
         <Button
           variant="ghost"
@@ -233,10 +255,34 @@ function ResourcesList({ workshopId, refetch, isRefetching }: { workshopId: stri
         </Button>
       </div>
       {data?.resources && data.resources.length > 0 ? (
-        <div className="space-y-2">
-          {data.resources.map((resource) => (
-            <ResourceRow key={resource.id} resource={resource} />
-          ))}
+        <div className="space-y-3">
+          {Object.entries(groupedResources).map(([participant, resources]) => {
+            const resourceGroup = resources[0]?.resource_group || ""
+            return (
+              <Collapsible key={participant} defaultOpen={defaultOpen}>
+                <CollapsibleTrigger className="flex items-center justify-between w-full p-3 rounded-lg border bg-muted/30 hover:bg-muted/50 transition-colors group">
+                  <div className="flex items-center gap-2">
+                    <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform group-data-[state=closed]:-rotate-90" />
+                    <Users className="h-4 w-4 text-muted-foreground" />
+                    <span className="font-medium">{participant}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {resourceGroup}
+                    </span>
+                  </div>
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary">
+                    {resources.length}개
+                  </span>
+                </CollapsibleTrigger>
+                <CollapsibleContent>
+                  <div className="space-y-2 mt-2 ml-4">
+                    {resources.map((resource) => (
+                      <ResourceRow key={resource.id} resource={resource} />
+                    ))}
+                  </div>
+                </CollapsibleContent>
+              </Collapsible>
+            )
+          })}
         </div>
       ) : (
         <p className="text-muted-foreground text-center py-8">
