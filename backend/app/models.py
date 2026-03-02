@@ -161,6 +161,7 @@ class WorkshopMetadata(BaseModel):
     status: str = "active"
     created_at: str = Field(..., min_length=1)
     created_by: Optional[str] = None
+    description: Optional[str] = None
     survey_url: Optional[str] = None
 
     @field_validator("status")
@@ -187,6 +188,9 @@ class WorkshopResponse(BaseModel):
     created_at: str
     estimated_cost: Optional[float] = 0.0
     currency: str = "USD"
+    created_by: Optional[str] = None
+    description: Optional[str] = None
+    allowed_regions: list[str] = Field(default_factory=list)
 
 
 class WorkshopDetail(BaseModel):
