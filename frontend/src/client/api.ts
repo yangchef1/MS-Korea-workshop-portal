@@ -253,7 +253,7 @@ export interface SubscriptionSettingsResponse {
 export interface Participant {
   alias?: string
   name?: string
-  email: string
+  upn?: string
   resource_group?: string
   user_principal_name?: string
   subscription_id?: string
@@ -399,14 +399,6 @@ export const handleApiError = (error: AxiosError<ApiError>): string => {
   return error.message || "An unexpected error occurred"
 }
 
-/** Email send result. */
-export interface EmailSendResponse {
-  total: number
-  sent: number
-  failed: number
-  results: Record<string, boolean>
-}
-
 // Workshop API
 export const workshopApi = {
   list: async (): Promise<Workshop[]> => {
@@ -486,19 +478,8 @@ export const workshopApi = {
     })
   },
 
-  /** 워크샵 참가자에게 만족도 조사 이메일을 전송한다. */
-  sendSurvey: async (
-    id: string,
-    emails?: string[]
-  ): Promise<EmailSendResponse> => {
-    const params = emails ? { participant_emails: emails } : {}
-    const response = await apiClient.post<EmailSendResponse>(
-      `/workshops/${id}/send-survey`,
-      null,
-      { params }
-    )
-    return response.data
-  },
+  // sendSurvey removed: personal emails are no longer stored (compliance).
+  // Survey links should be shared via Teams, chat, etc.
 
   /** 워크샵의 삭제 실패 항목 목록을 조회한다. */
   getDeletionFailures: async (

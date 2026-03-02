@@ -17,7 +17,6 @@ import {
   AlertCircle,
   ClipboardList,
   ExternalLink,
-  Send,
   Check,
   Link as LinkIcon,
   AlertTriangle,
@@ -77,7 +76,7 @@ function ParticipantRow({
   const queryClient = useQueryClient()
   const { user } = useAuth()
 
-  const alias = participant.alias || participant.name || participant.email
+  const alias = participant.alias || participant.name
   const isInvalid = alias ? invalidAliases.has(alias) : false
   const [selectedSub, setSelectedSub] = useState(
     participant.subscription_id || availableSubscriptions?.[0]?.subscription_id || ""
@@ -85,7 +84,7 @@ function ParticipantRow({
 
   const reassignMutation = useMutation({
     mutationFn: (subscriptionId: string) =>
-      workshopApi.reassignParticipantSubscription(workshopId, alias || participant.email, subscriptionId),
+      workshopApi.reassignParticipantSubscription(workshopId, alias || "", subscriptionId),
     onSuccess: () => {
       showSuccessToast("구독이 재배정되었습니다")
       queryClient.invalidateQueries({ queryKey: ["workshop", workshopId] })
@@ -107,7 +106,7 @@ function ParticipantRow({
           <div className="font-medium">{alias}</div>
           <div className="text-sm text-muted-foreground flex items-center gap-1">
             <Mail className="h-3 w-3" />
-            {participant.email}
+            {participant.user_principal_name || participant.upn || participant.alias}
           </div>
           {participant.resource_group && (
             <div className="text-sm text-muted-foreground">
@@ -365,18 +364,6 @@ function SurveyTab({ workshopId, surveyUrl }: { workshopId: string; surveyUrl?: 
     },
   })
 
-  const sendSurveyMutation = useMutation({
-    mutationFn: () => workshopApi.sendSurvey(workshopId),
-    onSuccess: (data) => {
-      showSuccessToast(
-        `설문 링크 전송 완료: ${data.sent}명 성공, ${data.failed}명 실패`
-      )
-    },
-    onError: () => {
-      showErrorToast("설문 링크 전송에 실패했습니다")
-    },
-  })
-
   const handleSaveUrl = () => {
     if (!urlInput.trim()) {
       showErrorToast("URL을 입력해 주세요")
@@ -445,30 +432,24 @@ function SurveyTab({ workshopId, surveyUrl }: { workshopId: string; surveyUrl?: 
         </CardContent>
       </Card>
 
-      {/* 설문 링크 공유 */}
+      {/* 설문 링크는 직접 공유 안내 (개인 이메일 미저장으로 이메일 전송 불가) */}
       <Card>
         <CardHeader>
           <CardTitle>설문 링크 공유</CardTitle>
           <CardDescription>
-            참가자에게 만족도 조사 링크를 이메일로 전송합니다
+            참가자에게 만족도 조사 링크를 직접 공유해 주세요
           </CardDescription>
         </CardHeader>
         <CardContent>
           {isSaved && urlInput ? (
             <div className="flex items-center gap-4">
-              <Button
-                onClick={() => sendSurveyMutation.mutate()}
-                disabled={sendSurveyMutation.isPending}
-              >
-                {sendSurveyMutation.isPending ? (
-                  <RefreshCw className="h-4 w-4 animate-spin mr-2" />
-                ) : (
-                  <Send className="h-4 w-4 mr-2" />
-                )}
-                {sendSurveyMutation.isPending
-                  ? "전송 중..."
-                  : "전체 참가자에게 전송"}
+              <Button variant="outline" onClick={copyToClipboard}>
+                <Copy className="h-4 w-4 mr-2" />
+                링크 복사
               </Button>
+              <p className="text-sm text-muted-foreground">
+                복사한 링크를 Teams, 채팅 등으로 참가자에게 공유하세요
+              </p>
             </div>
           ) : (
             <p className="text-muted-foreground text-sm">
@@ -865,7 +846,7 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
                 <div className="space-y-3">
                   {workshop.participants.map((participant, index) => (
                     <ParticipantRow
-                      key={participant.alias || participant.email || index}
+                      key={participant.alias || index}
                       participant={participant}
                       workshopId={workshop.id}
                       availableSubscriptions={workshop.available_subscriptions}
