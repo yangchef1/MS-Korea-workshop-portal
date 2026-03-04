@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useMemo } from "react"
 import { ArrowLeft, ChevronDown, Upload, Plus, Trash2, X } from "lucide-react"
 import { Link } from "@tanstack/react-router"
 
-import { workshopApi, type CreateWorkshopRequest, type VmSkuPresets } from "@/client"
+import { workshopApi, type CreateWorkshopRequest } from "@/client"
 import useAuth from "@/hooks/useAuth"
 import { Button } from "@/components/ui/button"
 import {
@@ -97,9 +97,9 @@ function CreateWorkshop() {
   })
 
   const { data: vmSkus = [] } = useQuery({
-    queryKey: ["vm-skus", selectedRegions[0]],
-    queryFn: () => workshopApi.getVmSkus(selectedRegions[0]),
-    enabled: isAuthenticated && selectedRegions.length > 0,
+    queryKey: ["vm-skus-common", regions.map((r) => r.value)],
+    queryFn: () => workshopApi.getCommonVmSkus(regions.map((r) => r.value)),
+    enabled: isAuthenticated,
   })
 
   // VM 리소스 차단 시 VM SKU 선택 비활성화
@@ -115,6 +115,17 @@ function CreateWorkshop() {
       setSelectedVmSkus([])
     }
   }, [isVmBlocked])
+
+  useEffect(() => {
+    if (isVmBlocked) {
+      return
+    }
+
+    const availableSkuNames = new Set(vmSkus.map((sku) => sku.name))
+    setSelectedVmSkus((previousSkus) =>
+      previousSkus.filter((sku) => availableSkuNames.has(sku))
+    )
+  }, [isVmBlocked, vmSkus])
 
   // API 데이터 도착 시 default 선택을 실제 리소스 타입에 맞춰 동기화
   const hasInitializedDefaults = useRef(false)
@@ -412,7 +423,14 @@ function CreateWorkshop() {
                       const preset = e.target.value
                       setSelectedPreset(preset)
                       if (preset && vmSkuPresets?.[preset]) {
-                        setSelectedVmSkus(vmSkuPresets[preset].skus)
+                        const availableSkuNames = new Set(
+                          vmSkus.map((sku) => sku.name)
+                        )
+                        setSelectedVmSkus(
+                          vmSkuPresets[preset].skus.filter((sku) =>
+                            availableSkuNames.has(sku)
+                          )
+                        )
                       } else {
                         setSelectedVmSkus([])
                       }
@@ -475,7 +493,8 @@ function CreateWorkshop() {
                   </div>
 
                   <p className="text-xs text-muted-foreground">
-                    프리셋을 선택하거나 직접 허용할 VM SKU를 추가하세요. 미선택 시 모든 VM 크기가 허용됩니다.
+                    선택한 모든 리전에 공통으로 배포 가능한 VM SKU만 표시됩니다.
+                    프리셋을 선택하거나 직접 허용할 SKU를 추가하세요. 미선택 시 모든 VM 크기가 허용됩니다.
                   </p>
                 </>
               )}

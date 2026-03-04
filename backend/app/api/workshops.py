@@ -116,6 +116,46 @@ class ParticipantSubscriptionUpdate(BaseModel):
     subscription_id: str
 
 
+class VmSkuResponse(BaseModel):
+    """VM SKU 정보 응답."""
+
+    name: str
+    family: str
+    vcpus: int
+    memory_gb: float
+
+
+@router.get("/vm-skus/common", response_model=list[VmSkuResponse])
+async def get_common_vm_skus(
+    regions: str,
+    resource_manager=Depends(get_resource_manager_service),
+):
+    """지정된 모든 리전에서 공통으로 지원되는 VM SKU 교집합을 반환한다 (24시간 캐시).
+
+    Azure Compute SKUs API를 단일 호출로 조회하여 서버에서 교집합을 계산한다.
+
+    Args:
+        regions: 쉼표로 구분된 리전 목록 (예: 'koreacentral,eastus,westus2').
+    """
+    region_list = [r.strip() for r in regions.split(",") if r.strip()]
+    skus = await resource_manager.list_common_vm_skus(region_list)
+    return [
+        VmSkuResponse(
+            name=sku["name"],
+            family=sku["family"],
+            vcpus=sku["vcpus"],
+            memory_gb=sku["memory_gb"],
+        )
+        for sku in skus
+    ]
+
+
+@router.get("/vm-sku-presets")
+async def get_vm_sku_presets():
+    """VM SKU 프리셋 목록을 반환한다."""
+    return settings.VM_SKU_PRESETS
+
+
 @router.get("/resource-types", response_model=list[ResourceType])
 async def get_resource_types(resource_manager=Depends(get_resource_manager_service)):
     """Azure 리소스 유형 목록을 조회한다 (24시간 캐시)."""
@@ -381,6 +421,50 @@ async def _setup_participant(
         return None
 
 
+async def _validate_vm_skus_for_regions(
+    vm_skus: list[str],
+    regions: list[str],
+    resource_mgr,
+) -> None:
+    """허용 VM SKU 목록이 선택된 모든 리전에서 사용 가능한지 검증한다.
+
+    Args:
+        vm_skus: 검증할 VM SKU 목록.
+        regions: 허용 리전 목록.
+        resource_mgr: ResourceManagerService 인스턴스.
+
+    Raises:
+        InvalidInputError: SKU가 하나 이상의 리전에서 미지원인 경우.
+    """
+    if not vm_skus:
+        return
+
+    unique_regions = [region for region in dict.fromkeys(regions) if region]
+    missing_skus_by_region: dict[str, list[str]] = {}
+
+    for region in unique_regions:
+        available_skus = await resource_mgr.list_vm_skus(region)
+        available_sku_names = {sku["name"] for sku in available_skus}
+        missing_skus = [sku for sku in vm_skus if sku not in available_sku_names]
+
+        if missing_skus:
+            missing_skus_by_region[region] = missing_skus
+
+    if not missing_skus_by_region:
+        return
+
+    details = []
+    for region, missing_skus in missing_skus_by_region.items():
+        preview = ", ".join(missing_skus[:5])
+        suffix = " ..." if len(missing_skus) > 5 else ""
+        details.append(f"{region}: {preview}{suffix}")
+
+    raise InvalidInputError(
+        "Some VM SKUs are not available in all selected regions. "
+        f"Details: {'; '.join(details)}"
+    )
+
+
 @router.post("", response_model=WorkshopDetail)
 async def create_workshop(
     name: str = Form(...),
@@ -419,6 +503,8 @@ async def create_workshop(
             "ignoring VM SKU policy (vm_skus=%s)", vm_skus
         )
         vm_skus = []
+
+    await _validate_vm_skus_for_regions(vm_skus, regions, resource_mgr)
 
     try:
         WorkshopCreateInput(
