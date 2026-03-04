@@ -502,10 +502,17 @@ export const workshopApi = {
     return response.data
   },
 
-  /** 특정 리전의 VM SKU 목록을 조회한다 (24시간 캐시). */
-  getVmSkus: async (location: string): Promise<VmSku[]> => {
-    const response = await apiClient.get<VmSku[]>("/workshops/vm-skus", {
-      params: { location },
+  /**
+   * 지정된 모든 리전에서 공통으로 지원되는 VM SKU 교집합을 조회한다.
+   *
+   * 서버에서 교집합을 계산하여 24시간 캐시로 반환한다.
+   *
+   * @param regions - 교집합 대상 리전 목록.
+   * @returns 모든 리전에서 지원되는 VM SKU 목록.
+   */
+  getCommonVmSkus: async (regions: string[]): Promise<VmSku[]> => {
+    const response = await apiClient.get<VmSku[]>("/workshops/vm-skus/common", {
+      params: { regions: regions.join(",") },
     })
     return response.data
   },
