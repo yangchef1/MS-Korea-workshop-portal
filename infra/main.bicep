@@ -89,7 +89,18 @@ module storage 'modules/storage-account.bicep' = {
   }
 }
 
-// 2. Communication Services
+// 2. Networking — VNet, Subnets, Private Endpoint, Private DNS Zone
+module networking 'modules/networking.bicep' = {
+  name: 'networking-${environmentName}'
+  scope: portalRg
+  params: {
+    environmentName: environmentName
+    location: location
+    storageAccountId: storage.outputs.storageAccountId
+  }
+}
+
+// 3. Communication Services
 module communication 'modules/communication.bicep' = {
   name: 'acs-${environmentName}'
   scope: portalRg
@@ -99,7 +110,7 @@ module communication 'modules/communication.bicep' = {
   }
 }
 
-// 3. Static Web App
+// 4. Static Web App
 // SWA Free tier is not available in koreacentral; eastasia is the closest supported region.
 module swa 'modules/static-web-app.bicep' = {
   name: 'swa-${environmentName}'
@@ -110,7 +121,7 @@ module swa 'modules/static-web-app.bicep' = {
   }
 }
 
-// 4. Container Apps (Backend)
+// 5. Container Apps (Backend)
 module containerApps 'modules/container-apps.bicep' = {
   name: 'ca-${environmentName}'
   scope: portalRg
@@ -130,10 +141,11 @@ module containerApps 'modules/container-apps.bicep' = {
     azureTenantId: azureTenantId
     azureClientId: azureClientId
     allowedOrigins: 'https://${swa.outputs.defaultHostname}'
+    containerAppsSubnetId: networking.outputs.containerAppsSubnetId
   }
 }
 
-// 5. Function App (Workshop Cleanup)
+// 6. Function App (Workshop Cleanup)
 module functionApp 'modules/function-app.bicep' = {
   name: 'func-${environmentName}'
   scope: portalRg

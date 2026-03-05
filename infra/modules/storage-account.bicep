@@ -26,6 +26,9 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
     supportsHttpsTrafficOnly: true
     minimumTlsVersion: 'TLS1_2'
     allowBlobPublicAccess: false
+    // Explicitly set to match the policy enforced externally by the automated governance app.
+    // Connectivity is provided exclusively through the Private Endpoint defined in networking.bicep.
+    publicNetworkAccess: 'Disabled'
   }
   tags: {
     project: 'workshop-portal'
