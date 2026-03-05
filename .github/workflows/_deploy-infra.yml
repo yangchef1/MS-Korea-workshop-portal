@@ -59,14 +59,10 @@ jobs:
       - name: Get backend FQDN
         id: get-fqdn
         run: |
-          FQDN=$(az deployment sub show \
-            --name networking-${{ inputs.environment }} \
-            --query "properties.outputs.containerAppFqdn.value" \
-            -o tsv 2>/dev/null || \
-          az containerapp show \
+          FQDN=$(az containerapp show \
             --name ca-workshop-backend-${{ inputs.environment }} \
             --resource-group rg-workshop-portal-${{ inputs.environment }} \
             --query "properties.configuration.ingress.fqdn" \
             -o tsv)
-          echo "backend_url=https://${FQDN}" >> $GITHUB_OUTPUT
-          echo "Backend URL: https://${FQDN}"
+          echo "backend_url=https://${FQDN}/api" >> $GITHUB_OUTPUT
+          echo "Backend URL: https://${FQDN}/api"
