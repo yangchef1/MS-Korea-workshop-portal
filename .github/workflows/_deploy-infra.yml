@@ -12,6 +12,10 @@ on:
         description: "Target environment (dev | prod)"
         required: true
         type: string
+    outputs:
+      backend_url:
+        description: "Backend Container App HTTPS URL"
+        value: ${{ jobs.deploy.outputs.backend_url }}
 
 permissions:
   id-token: write
@@ -22,6 +26,8 @@ jobs:
     name: Deploy Infrastructure (${{ inputs.environment }})
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
+    outputs:
+      backend_url: ${{ steps.get-fqdn.outputs.backend_url }}
     steps:
       - uses: actions/checkout@v4
 
@@ -49,3 +55,18 @@ jobs:
             --location koreacentral \
             --template-file infra/main.bicep \
             --parameters infra/parameters/${{ inputs.environment }}.bicepparam
+
+      - name: Get backend FQDN
+        id: get-fqdn
+        run: |
+          FQDN=$(az deployment sub show \
+            --name networking-${{ inputs.environment }} \
+            --query "properties.outputs.containerAppFqdn.value" \
+            -o tsv 2>/dev/null || \
+          az containerapp show \
+            --name ca-workshop-backend-${{ inputs.environment }} \
+            --resource-group rg-workshop-portal-${{ inputs.environment }} \
+            --query "properties.configuration.ingress.fqdn" \
+            -o tsv)
+          echo "backend_url=https://${FQDN}" >> $GITHUB_OUTPUT
+          echo "Backend URL: https://${FQDN}"
