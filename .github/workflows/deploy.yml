@@ -134,6 +134,9 @@ jobs:
     uses: ./.github/workflows/_deploy-frontend.yml
     with:
       environment: ${{ needs.detect-changes.outputs.environment }}
+      # Pass the FQDN from infra output so frontend always points to the current backend.
+      # Falls back to vars.VITE_API_BASE_URL if infra job was skipped.
+      api_base_url: ${{ needs.deploy-infra.outputs.backend_url }}
     secrets: inherit
     permissions:
       contents: read
