@@ -13,6 +13,11 @@ from azure.identity import (
     ClientSecretCredential,
     DefaultAzureCredential,
 )
+from azure.identity.aio import (
+    AzureCliCredential as AsyncAzureCliCredential,
+    ClientSecretCredential as AsyncClientSecretCredential,
+    DefaultAzureCredential as AsyncDefaultAzureCredential,
+)
 
 from app.config import settings
 
@@ -64,4 +69,44 @@ def get_azure_credential() -> ClientSecretCredential | DefaultAzureCredential | 
         )
     except Exception as e:
         logger.error("Failed to create Azure credential: %s", e)
+        raise
+
+
+def get_async_azure_credential(
+) -> AsyncClientSecretCredential | AsyncDefaultAzureCredential | AsyncAzureCliCredential:
+    """호출 시마다 새 비동기 Azure credential 인스턴스를 생성한다.
+
+    우선순위:
+    1. Service Principal 환경변수 설정 시 → ClientSecretCredential
+    2. USE_AZURE_CLI_CREDENTIAL=true 시 → AzureCliCredential
+    3. 그 외 → DefaultAzureCredential (Managed Identity 등)
+
+    Returns:
+        비동기 Azure credential 객체.
+
+    Raises:
+        Exception: credential 생성 실패 시.
+    """
+    try:
+        if _has_sp_config():
+            logger.debug("Using ClientSecretCredential (async, Service Principal)")
+            return AsyncClientSecretCredential(
+                tenant_id=settings.azure_sp_tenant_id,
+                client_id=settings.azure_sp_client_id,
+                client_secret=settings.azure_sp_client_secret,
+            )
+
+        if settings.use_azure_cli_credential:
+            logger.debug("Using AzureCliCredential (async) for local development")
+            return AsyncAzureCliCredential()
+
+        logger.debug("Using DefaultAzureCredential (async)")
+        return AsyncDefaultAzureCredential(
+            exclude_shared_token_cache_credential=True,
+            exclude_visual_studio_code_credential=True,
+            exclude_azure_powershell_credential=True,
+            exclude_interactive_browser_credential=True,
+        )
+    except Exception as e:
+        logger.error("Failed to create async Azure credential: %s", e)
         raise
