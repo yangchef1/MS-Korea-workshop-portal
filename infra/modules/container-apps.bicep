@@ -105,6 +105,14 @@ resource containerAppEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
       infrastructureSubnetId: containerAppsSubnetId
       internal: false
     }
+    // VNet-integrated CAEs require at least one workload profile.
+    // Consumption is the serverless default (no dedicated nodes, pay-per-use).
+    workloadProfiles: [
+      {
+        name: 'Consumption'
+        workloadProfileType: 'Consumption'
+      }
+    ]
   }
   tags: {
     project: 'workshop-portal'
@@ -123,6 +131,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
   }
   properties: {
     managedEnvironmentId: containerAppEnv.id
+    workloadProfileName: 'Consumption'
     configuration: {
       activeRevisionsMode: 'Single'
       ingress: {
