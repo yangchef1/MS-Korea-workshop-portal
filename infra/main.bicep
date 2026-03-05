@@ -60,6 +60,9 @@ param azureTenantId string = tenantId
 @description('MSAL client ID for JWT validation.')
 param azureClientId string = ''
 
+@description('Container image tag. Set to empty string to use a placeholder image for initial deployment.')
+param imageTag string = ''
+
 @description('Resource group name for portal infrastructure.')
 param resourceGroupName string = 'rg-workshop-portal-${environmentName}'
 
@@ -142,6 +145,7 @@ module containerApps 'modules/container-apps.bicep' = {
     azureClientId: azureClientId
     allowedOrigins: 'https://${swa.outputs.defaultHostname}'
     containerAppsSubnetId: networking.outputs.containerAppsSubnetId
+    imageTag: imageTag
   }
 }
 
