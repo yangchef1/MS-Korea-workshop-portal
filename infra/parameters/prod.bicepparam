@@ -17,6 +17,9 @@ param tenantId = readEnvironmentVariable('AZURE_SP_TENANT_ID')
 param spClientId = readEnvironmentVariable('AZURE_SP_CLIENT_ID')
 param spDomain = readEnvironmentVariable('AZURE_SP_DOMAIN')
 param ghcrImage = readEnvironmentVariable('GHCR_IMAGE')
+// Pass the exact image tag to prevent rollback to placeholder on re-deployment.
+// Set IMAGE_TAG to the currently running tag (e.g. the Git SHA) before deploying.
+param imageTag = readEnvironmentVariable('IMAGE_TAG', '')
 param azureTenantId = readEnvironmentVariable('AZURE_TENANT_ID')
 param azureClientId = readEnvironmentVariable('AZURE_CLIENT_ID', '')
 

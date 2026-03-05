@@ -54,6 +54,9 @@ param imageTag string = ''
 @description('Allowed CORS origins (comma-separated).')
 param allowedOrigins string = ''
 
+@description('Container Apps subnet resource ID for VNet integration. Required for Private Endpoint connectivity to Storage.')
+param containerAppsSubnetId string
+
 // ---------------------------------------------------------------------------
 // Derived values
 // ---------------------------------------------------------------------------
@@ -95,6 +98,12 @@ resource containerAppEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
         customerId: logAnalytics.properties.customerId
         sharedKey: logAnalytics.listKeys().primarySharedKey
       }
+    }
+    vnetConfiguration: {
+      // Subnet must be delegated to Microsoft.App/environments.
+      // internal: false preserves external ingress so SWA can reach the backend.
+      infrastructureSubnetId: containerAppsSubnetId
+      internal: false
     }
   }
   tags: {
@@ -215,3 +224,5 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
 output fqdn string = containerApp.properties.configuration.ingress.fqdn
 output appName string = containerApp.name
 output principalId string = containerApp.identity.principalId
+// Exposed for Phase 2 — Container Apps Job will reference this environment.
+output containerAppEnvId string = containerAppEnv.id
