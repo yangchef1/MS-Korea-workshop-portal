@@ -7,24 +7,27 @@ Tables:
 - workshops: 워크샵 메타데이터 (PartitionKey="workshop", RowKey=workshop_id)
 - templates: ARM 템플릿 (PartitionKey="template", RowKey=template_name)
 """
+import base64
+import gzip
 import json
 import logging
+import time
 from functools import lru_cache
 from typing import Any
 
 from azure.core.exceptions import HttpResponseError, ResourceNotFoundError
 from azure.core import MatchConditions
 from azure.data.tables.aio import TableServiceClient
-from azure.identity.aio import (
-    AzureCliCredential,
-    ClientSecretCredential,
-    DefaultAzureCredential,
-)
 from pydantic import ValidationError as PydanticValidationError
 
 from app.config import settings
-from app.exceptions import ValidationError as AppValidationError
+from app.exceptions import (
+    ConflictError,
+    EntityNotFoundError,
+    ValidationError as AppValidationError,
+)
 from app.models import DeletionFailureItem, WorkshopMetadata
+from app.services.credential import get_async_azure_credential
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +42,9 @@ TEMPLATE_PARTITION_KEY = "template"
 USER_PARTITION_KEY = "user"
 PORTAL_SETTINGS_PARTITION_KEY = "config"
 PORTAL_SETTINGS_ROW_KEY_SUBSCRIPTIONS = "subscriptions"
+VM_SKUS_PARTITION_KEY = "vmskus"
+
+_VM_SKUS_TABLE_CACHE_TTL_SECONDS = 7 * 24 * 3600  # 7일
 
 _ACQUIRE_MAX_RETRIES = 3
 
@@ -58,7 +64,7 @@ class StorageService:
             account_url = (
                 f"https://{settings.table_storage_account}.table.core.windows.net"
             )
-            credential = self._create_credential()
+            credential = get_async_azure_credential()
 
             self.table_service_client = TableServiceClient(
                 endpoint=account_url,
@@ -71,24 +77,6 @@ class StorageService:
         except Exception as e:
             logger.error("Failed to initialize Table Storage client: %s", e)
             raise
-
-    @staticmethod
-    def _create_credential() -> ClientSecretCredential | DefaultAzureCredential | AzureCliCredential:
-        """설정에 따라 적절한 비동기 Azure credential을 생성한다."""
-        if settings.azure_sp_tenant_id and settings.azure_sp_client_id and settings.azure_sp_client_secret:
-            return ClientSecretCredential(
-                tenant_id=settings.azure_sp_tenant_id,
-                client_id=settings.azure_sp_client_id,
-                client_secret=settings.azure_sp_client_secret,
-            )
-        if settings.use_azure_cli_credential:
-            return AzureCliCredential()
-        return DefaultAzureCredential(
-            exclude_shared_token_cache_credential=True,
-            exclude_visual_studio_code_credential=True,
-            exclude_azure_powershell_credential=True,
-            exclude_interactive_browser_credential=True,
-        )
 
     async def _ensure_tables_exist(self) -> None:
         """필요한 테이블이 존재하지 않으면 생성한다 (lazy 초기화)."""
@@ -396,8 +384,6 @@ class StorageService:
         Raises:
             ConflictError: 재시도 한도 초과 시.
         """
-        from app.exceptions import ConflictError
-
         await self._ensure_tables_exist()
         table_client = self.table_service_client.get_table_client(PORTAL_SETTINGS_TABLE)
 
@@ -471,8 +457,6 @@ class StorageService:
         Args:
             subscription_ids: 해제할 구독 ID 목록.
         """
-        from app.exceptions import ConflictError
-
         if not subscription_ids:
             return
 
@@ -521,6 +505,76 @@ class StorageService:
                 ) from e
 
     # ------------------------------------------------------------------
+    # VM SKU cache
+    # ------------------------------------------------------------------
+
+    async def get_vm_sku_cache(
+        self, cache_key: str,
+    ) -> tuple[list[dict] | None, float | None]:
+        """Table Storage에서 VM SKU 캐시 데이터를 조회한다.
+
+        gzip 압축 데이터(skus_json_gz)를 우선 읽고, 없으면 비압축(skus_json)으로 폴백한다.
+
+        Args:
+            cache_key: 리전 조합 키 (정렬된 리전명 쉼표 구분, 예: 'eastus,koreacentral').
+
+        Returns:
+            (SKU 목록, 저장 시각 unix timestamp) 튜플.
+            데이터가 없으면 (None, None).
+        """
+        await self._ensure_tables_exist()
+        try:
+            table_client = self.table_service_client.get_table_client(PORTAL_SETTINGS_TABLE)
+            entity = await table_client.get_entity(
+                partition_key=VM_SKUS_PARTITION_KEY,
+                row_key=cache_key,
+            )
+            if "skus_json_gz" in entity:
+                # gzip 압축 데이터 (base64 encoded)
+                compressed = base64.b64decode(entity["skus_json_gz"])
+                skus = json.loads(gzip.decompress(compressed).decode())
+            else:
+                # 구버전 비압축 폴백
+                skus = json.loads(entity.get("skus_json", "[]"))
+            saved_at = float(entity.get("saved_at", 0))
+            return skus, saved_at
+        except ResourceNotFoundError:
+            return None, None
+        except Exception as e:
+            logger.error("Failed to get VM SKU cache (key: %s): %s", cache_key, e)
+            return None, None
+
+    async def set_vm_sku_cache(self, cache_key: str, skus: list[dict]) -> None:
+        """VM SKU 목록을 gzip 압축 후 Table Storage에 저장한다.
+
+        JSON → gzip → base64 변환 후 skus_json_gz 필드에 저장한다.
+        Azure Table Storage의 64KB 속성 제한(~140KB JSON) 우회.
+
+        Args:
+            cache_key: 리전 조합 키 (정렬된 리전명 쉼표 구분).
+            skus: 저장할 VM SKU 목록.
+        """
+        await self._ensure_tables_exist()
+        try:
+            compressed = base64.b64encode(
+                gzip.compress(json.dumps(skus).encode())
+            ).decode()
+            table_client = self.table_service_client.get_table_client(PORTAL_SETTINGS_TABLE)
+            entity = {
+                "PartitionKey": VM_SKUS_PARTITION_KEY,
+                "RowKey": cache_key,
+                "skus_json_gz": compressed,
+                "saved_at": str(time.time()),
+            }
+            await table_client.upsert_entity(entity)
+            logger.info(
+                "Saved VM SKU cache to Table Storage (key: %s, count: %d, compressed: %d bytes)",
+                cache_key, len(skus), len(compressed),
+            )
+        except Exception as e:
+            logger.error("Failed to save VM SKU cache (key: %s): %s", cache_key, e)
+
+    # ------------------------------------------------------------------
     # Templates
     # ------------------------------------------------------------------
 
@@ -547,8 +601,6 @@ class StorageService:
         Raises:
             ConflictError: 동일 이름의 템플릿이 이미 존재하는 경우.
         """
-        from app.exceptions import ConflictError
-
         await self._ensure_tables_exist()
 
         table_client = self.table_service_client.get_table_client(TEMPLATES_TABLE)
@@ -704,8 +756,6 @@ class StorageService:
         Raises:
             EntityNotFoundError: 템플릿이 존재하지 않는 경우.
         """
-        from app.exceptions import EntityNotFoundError
-
         await self._ensure_tables_exist()
 
         table_client = self.table_service_client.get_table_client(TEMPLATES_TABLE)
@@ -748,8 +798,6 @@ class StorageService:
         Raises:
             EntityNotFoundError: 템플릿이 존재하지 않는 경우.
         """
-        from app.exceptions import EntityNotFoundError
-
         await self._ensure_tables_exist()
 
         table_client = self.table_service_client.get_table_client(TEMPLATES_TABLE)

@@ -58,26 +58,6 @@ class JWTValidationService:
                 self._jwks_cache_time = time.monotonic()
         return self._jwks_cache
 
-    def _get_jwks_sync(self, force_refresh: bool = False) -> dict:
-        """Azure AD에서 JSON Web Key Set을 동기적으로 조회한다.
-
-        TTL 기반 캐시를 사용하여 키 로테이션 시에도 주기적으로 갱신한다.
-
-        Args:
-            force_refresh: 캐시를 무시하고 새로 조회할지 여부.
-
-        Returns:
-            JWKS 딕셔너리.
-        """
-        cache_expired = (time.monotonic() - self._jwks_cache_time) >= _JWKS_CACHE_TTL
-        if self._jwks_cache is None or force_refresh or cache_expired:
-            with httpx.Client() as client:
-                response = client.get(self.jwks_uri)
-                response.raise_for_status()
-                self._jwks_cache = response.json()
-                self._jwks_cache_time = time.monotonic()
-        return self._jwks_cache
-
     @staticmethod
     def _find_key(kid: str, jwks: dict) -> Optional[dict]:
         """JWT 헤더의 kid와 일치하는 키를 찾는다."""
@@ -128,50 +108,6 @@ class JWTValidationService:
 
             if not key:
                 jwks = await self._get_jwks(force_refresh=True)
-                key = self._find_key(kid, jwks)
-                if not key:
-                    logger.warning("Signing key not found for kid: %s", kid)
-                    return None
-
-            claims = self._decode_token(token, key)
-            logger.debug(
-                "Token validated for user: %s",
-                claims.get("preferred_username"),
-            )
-            return claims
-
-        except ExpiredSignatureError:
-            logger.warning("Token has expired")
-            return None
-        except JWTError as e:
-            logger.warning("JWT validation error: %s", e)
-            return None
-        except Exception as e:
-            logger.error("Unexpected error validating token: %s", e)
-            return None
-
-    def validate_token_sync(self, token: str) -> Optional[dict[str, Any]]:
-        """Azure AD access token을 동기적으로 검증한다.
-
-        Args:
-            token: Azure AD의 JWT access token.
-
-        Returns:
-            유효한 경우 토큰 클레임, 그렇지 않으면 None.
-        """
-        try:
-            unverified_header = jwt.get_unverified_header(token)
-            kid = unverified_header.get("kid")
-
-            if not kid:
-                logger.warning("Token missing key ID (kid)")
-                return None
-
-            jwks = self._get_jwks_sync()
-            key = self._find_key(kid, jwks)
-
-            if not key:
-                jwks = self._get_jwks_sync(force_refresh=True)
                 key = self._find_key(kid, jwks)
                 if not key:
                     logger.warning("Signing key not found for kid: %s", kid)

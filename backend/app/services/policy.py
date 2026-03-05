@@ -6,7 +6,6 @@ DefaultAzureCredential(OIDC/Managed Identity)을 사용하여 인증한다.
 """
 import asyncio
 import logging
-import re
 import uuid
 from functools import lru_cache
 from typing import Any
@@ -18,24 +17,23 @@ from azure.core.exceptions import (
     ResourceNotFoundError,
     ServiceRequestError,
 )
-from azure.identity.aio import (
-    AzureCliCredential,
-    ClientSecretCredential,
-    DefaultAzureCredential,
-)
 from azure.mgmt.resource.policy.aio import PolicyClient
 from azure.mgmt.resource.policy.models import PolicyAssignment
 
 from app.config import settings
 from app.exceptions import (
     AzureAuthenticationError,
-    InvalidScopeError,
     PolicyAssignmentError,
     PolicyNotFoundError,
     PolicyServiceError,
 )
+from app.services.credential import get_async_azure_credential
 
 logger = logging.getLogger(__name__)
+
+WORKSHOP_ALLOWED_LOCATIONS_ASSIGNMENT = "workshop-allowed-locations"
+WORKSHOP_DENIED_RESOURCES_ASSIGNMENT = "workshop-denied-resources"
+WORKSHOP_ALLOWED_VM_SKUS_ASSIGNMENT = "workshop-allowed-vm-skus"
 
 
 class PolicyService:
@@ -65,7 +63,7 @@ class PolicyService:
             PolicyServiceError: 기타 초기화 실패 시.
         """
         try:
-            self._credential = self._create_credential()
+            self._credential = get_async_azure_credential()
             self._default_subscription_id = settings.azure_subscription_id
             logger.info("PolicyService initialized successfully")
         except ClientAuthenticationError as e:
@@ -78,28 +76,6 @@ class PolicyService:
             raise PolicyServiceError(
                 "Failed to initialize PolicyService"
             ) from e
-
-    def _create_credential(self) -> ClientSecretCredential | DefaultAzureCredential | AzureCliCredential:
-        """설정에 따라 적절한 비동기 Azure credential을 생성한다."""
-        if settings.azure_sp_tenant_id and settings.azure_sp_client_id and settings.azure_sp_client_secret:
-            logger.debug("Using ClientSecretCredential (async, Service Principal)")
-            return ClientSecretCredential(
-                tenant_id=settings.azure_sp_tenant_id,
-                client_id=settings.azure_sp_client_id,
-                client_secret=settings.azure_sp_client_secret,
-            )
-
-        if settings.use_azure_cli_credential:
-            logger.debug("Using AzureCliCredential (async) for local development")
-            return AzureCliCredential()
-
-        logger.debug("Using DefaultAzureCredential (async)")
-        return DefaultAzureCredential(
-            exclude_shared_token_cache_credential=True,
-            exclude_visual_studio_code_credential=True,
-            exclude_azure_powershell_credential=True,
-            exclude_interactive_browser_credential=True,
-        )
 
     def _get_policy_client(self, subscription_id: str | None = None) -> PolicyClient:
         """특정 구독의 PolicyClient를 반환한다."""
@@ -279,19 +255,29 @@ class PolicyService:
         tasks = [
             self.assign_location_policy(
                 scope, allowed_locations,
-                assignment_name="workshop-allowed-locations",
+                assignment_name=WORKSHOP_ALLOWED_LOCATIONS_ASSIGNMENT,
                 subscription_id=subscription_id,
             ),
             self.assign_denied_resource_types_policy(
                 scope, denied_resource_types,
-                assignment_name="workshop-denied-resources",
+                assignment_name=WORKSHOP_DENIED_RESOURCES_ASSIGNMENT,
                 subscription_id=subscription_id,
             ),
         ]
+        policy_keys = ["location_policy", "resource_types_policy"]
+
+        if allowed_vm_skus:
+            tasks.append(
+                self.assign_allowed_vm_skus_policy(
+                    scope, allowed_vm_skus,
+                    assignment_name=WORKSHOP_ALLOWED_VM_SKUS_ASSIGNMENT,
+                    subscription_id=subscription_id,
+                )
+            )
+            policy_keys.append("vm_skus_policy")
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        policy_keys = ("location_policy", "resource_types_policy")
         policies: dict[str, Any] = {}
 
         for key, result in zip(policy_keys, results):
@@ -348,79 +334,6 @@ class PolicyService:
             logger.error("Azure error during policy deletion: %s", type(e).__name__)
             raise PolicyServiceError(
                 f"Failed to delete policy assignment: {str(e)}"
-            ) from e
-
-    async def list_policy_assignments(
-        self,
-        scope: str,
-        subscription_id: str | None = None,
-    ) -> list[dict[str, Any]]:
-        """구독 또는 리소스 그룹 범위의 정책 할당 목록을 조회한다.
-
-        Args:
-            scope: 구독 또는 리소스 그룹 범위
-                (/subscriptions/{sub-id} 또는
-                /subscriptions/{sub-id}/resourceGroups/{rg-name}).
-            subscription_id: 대상 구독 ID. 미지정 시 기본 구독 사용.
-
-        Returns:
-            정책 할당 상세 목록.
-
-        Raises:
-            InvalidScopeError: scope 형식이 올바르지 않은 경우.
-            AzureAuthenticationError: 인증 실패 시.
-            PolicyServiceError: 조회 실패 시.
-        """
-        # Check if it's a subscription-level scope
-        sub_pattern = re.compile(r"^/subscriptions/[a-f0-9-]+$", re.IGNORECASE)
-        rg_pattern = re.compile(r"^/subscriptions/[a-f0-9-]+/resourceGroups/([^/]+)$", re.IGNORECASE)
-        
-        rg_match = rg_pattern.match(scope)
-        is_subscription_scope = sub_pattern.match(scope) is not None
-        
-        if not is_subscription_scope and not rg_match:
-            raise InvalidScopeError(
-                "Invalid scope format. Expected: "
-                "/subscriptions/{subscription-id} or "
-                "/subscriptions/{subscription-id}/resourceGroups/{resource-group-name}"
-            )
-
-        try:
-            policy_client = self._get_policy_client(subscription_id)
-            if is_subscription_scope:
-                # List assignments for subscription
-                assignments = policy_client.policy_assignments.list()
-            else:
-                # List assignments for resource group
-                resource_group_name = rg_match.group(1)
-                assignments = policy_client.policy_assignments.list_for_resource_group(
-                    resource_group_name=resource_group_name
-                )
-
-            result: list[dict[str, Any]] = []
-            async for assignment in assignments:
-                result.append({
-                    'id': assignment.id,
-                    'name': assignment.name,
-                    'display_name': assignment.display_name,
-                    'policy_definition_id': assignment.policy_definition_id,
-                    'scope': assignment.scope
-                })
-
-            logger.debug(
-                "Listed %d policy assignments for %s", len(result), scope
-            )
-            return result
-
-        except ClientAuthenticationError as e:
-            logger.error("Authentication failed during policy listing")
-            raise AzureAuthenticationError(
-                "Authentication failed. Please re-authenticate."
-            ) from e
-        except AzureError as e:
-            logger.error("Azure error during policy listing: %s", type(e).__name__)
-            raise PolicyServiceError(
-                f"Failed to list policy assignments: {str(e)}"
             ) from e
 
 
