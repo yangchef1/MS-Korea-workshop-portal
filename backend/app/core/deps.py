@@ -15,6 +15,7 @@ from app.services.resource_manager import resource_manager_service
 from app.services.role import role_service
 from app.services.subscription import subscription_service
 from app.services.storage import storage_service
+from app.services.workshop import workshop_service
 
 
 def get_storage_service():
@@ -55,6 +56,11 @@ def get_role_service():
 def get_subscription_service():
     """SubscriptionService 싱글턴을 반환한다."""
     return subscription_service
+
+
+def get_workshop_service():
+    """WorkshopService 싱글턴을 반환한다."""
+    return workshop_service
 
 
 def get_current_user(request: Request) -> Optional[dict[str, Any]]:

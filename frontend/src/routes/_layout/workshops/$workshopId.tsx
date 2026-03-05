@@ -17,13 +17,14 @@ import {
   AlertCircle,
   ClipboardList,
   ExternalLink,
-  Send,
   Check,
   Link as LinkIcon,
   AlertTriangle,
   RotateCw,
   UserX,
   FolderX,
+  ChevronDown,
+  Cpu,
 } from "lucide-react"
 
 import { workshopApi, type Participant, type AzureResource, type CostBreakdown, type DeletionFailure, type SubscriptionInfo } from "@/client"
@@ -50,6 +51,11 @@ import {
 } from "@/components/ui/alert-dialog"
 import useCustomToast from "@/hooks/useCustomToast"
 import useAuth from "@/hooks/useAuth"
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible"
 
 function getWorkshopQueryOptions(workshopId: string) {
   return {
@@ -77,7 +83,7 @@ function ParticipantRow({
   const queryClient = useQueryClient()
   const { user } = useAuth()
 
-  const alias = participant.alias || participant.name || participant.email
+  const alias = participant.alias || participant.name
   const isInvalid = alias ? invalidAliases.has(alias) : false
   const [selectedSub, setSelectedSub] = useState(
     participant.subscription_id || availableSubscriptions?.[0]?.subscription_id || ""
@@ -85,7 +91,7 @@ function ParticipantRow({
 
   const reassignMutation = useMutation({
     mutationFn: (subscriptionId: string) =>
-      workshopApi.reassignParticipantSubscription(workshopId, alias || participant.email, subscriptionId),
+      workshopApi.reassignParticipantSubscription(workshopId, alias || "", subscriptionId),
     onSuccess: () => {
       showSuccessToast("구독이 재배정되었습니다")
       queryClient.invalidateQueries({ queryKey: ["workshop", workshopId] })
@@ -107,7 +113,7 @@ function ParticipantRow({
           <div className="font-medium">{alias}</div>
           <div className="text-sm text-muted-foreground flex items-center gap-1">
             <Mail className="h-3 w-3" />
-            {participant.email}
+            {participant.user_principal_name || participant.upn || participant.alias}
           </div>
           {participant.resource_group && (
             <div className="text-sm text-muted-foreground">
@@ -193,12 +199,65 @@ function ResourceRow({ resource }: { resource: AzureResource }) {
           <div className="text-sm text-muted-foreground">
             {getResourceTypeDisplay(resource.type)} · {resource.location}
           </div>
-          <div className="text-xs text-muted-foreground">
-            참가자: {resource.participant} · {resource.resource_group}
-          </div>
         </div>
       </div>
     </div>
+  )
+}
+
+/** VM SKU 정책 정보를 카드 형태로 표시한다. 프리셋 이름을 기본 노출하고, SKU 목록은 토글로 접어둔다. */
+function VmSkuPolicyCard({ policy }: { policy?: { allowed_vm_skus?: string[]; vm_sku_preset?: string; denied_services?: string[] } }) {
+  const [isOpen, setIsOpen] = useState(false)
+  const skus = policy?.allowed_vm_skus || []
+  const preset = policy?.vm_sku_preset
+  const isVmDenied = policy?.denied_services?.includes("Microsoft.Compute/virtualMachines")
+
+  const presetLabels: Record<string, string> = {
+    "basic-lab": "Basic Lab",
+    "ai-ml": "AI/ML Workshop",
+  }
+
+  const displayLabel = isVmDenied
+    ? "VM 차단됨"
+    : preset
+      ? presetLabels[preset] || preset
+      : skus.length > 0
+        ? `커스텀 (${skus.length}개)`
+        : "제한 없음"
+
+  return (
+    <Card className="flex items-center">
+      <CardContent className="py-4 w-full">
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center gap-2 text-muted-foreground">
+            <Cpu className="h-4 w-4" />
+            <span className="text-sm">VM 크기 제한</span>
+          </div>
+          {skus.length > 0 ? (
+            <Collapsible open={isOpen} onOpenChange={setIsOpen}>
+              <CollapsibleTrigger className="flex items-center gap-1 group">
+                <p className="text-xl font-semibold">{displayLabel}</p>
+                <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${isOpen ? "rotate-180" : ""}`} />
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <div className="flex flex-wrap gap-1 mt-2">
+                  {skus.map((sku) => (
+                    <span
+                      key={sku}
+                      className="inline-flex items-center px-1.5 py-0.5 rounded text-xs bg-muted text-muted-foreground"
+                    >
+                      {sku}
+                    </span>
+                  ))}
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
+          ) : (
+            <p className="text-xl font-semibold">{displayLabel}</p>
+          )}
+        </div>
+      </CardContent>
+    </Card>
   )
 }
 
@@ -207,6 +266,25 @@ function ResourcesList({ workshopId, refetch, isRefetching }: { workshopId: stri
     queryKey: ['workshop-resources', workshopId],
     queryFn: () => workshopApi.getResources(workshopId),
   })
+
+  const COLLAPSE_THRESHOLD = 5
+
+  // Group resources by participant
+  const groupedResources = useMemo(() => {
+    if (!data?.resources) return {}
+    return data.resources.reduce<Record<string, AzureResource[]>>(
+      (groups, resource) => {
+        const key = resource.participant || "unknown"
+        if (!groups[key]) groups[key] = []
+        groups[key].push(resource)
+        return groups
+      },
+      {},
+    )
+  }, [data?.resources])
+
+  const participantCount = Object.keys(groupedResources).length
+  const defaultOpen = participantCount <= COLLAPSE_THRESHOLD
 
   if (isLoading) {
     return (
@@ -221,7 +299,7 @@ function ResourcesList({ workshopId, refetch, isRefetching }: { workshopId: stri
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">
-          총 {data?.total_count || 0}개의 리소스
+          총 {data?.total_count || 0}개의 리소스 · {participantCount}명의 참가자
         </p>
         <Button
           variant="ghost"
@@ -234,10 +312,36 @@ function ResourcesList({ workshopId, refetch, isRefetching }: { workshopId: stri
         </Button>
       </div>
       {data?.resources && data.resources.length > 0 ? (
-        <div className="space-y-2">
-          {data.resources.map((resource) => (
-            <ResourceRow key={resource.id} resource={resource} />
-          ))}
+        <div className="space-y-3">
+          {Object.entries(groupedResources).map(([participant, resources]) => {
+            const resourceGroup = resources[0]?.resource_group || ""
+            return (
+              <div key={participant} className="rounded-lg border overflow-hidden">
+                <Collapsible defaultOpen={defaultOpen}>
+                  <CollapsibleTrigger className="flex items-center justify-between w-full p-3 bg-muted/30 hover:bg-muted/50 transition-colors group">
+                    <div className="flex items-center gap-2">
+                      <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform group-data-[state=closed]:-rotate-90" />
+                      <Users className="h-4 w-4 text-muted-foreground" />
+                      <span className="font-medium">{participant}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {resourceGroup}
+                      </span>
+                    </div>
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary">
+                      {resources.length}개
+                    </span>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent className="border-t bg-background">
+                    <div className="space-y-2 p-3">
+                      {resources.map((resource) => (
+                        <ResourceRow key={resource.id} resource={resource} />
+                      ))}
+                    </div>
+                  </CollapsibleContent>
+                </Collapsible>
+              </div>
+            )
+          })}
         </div>
       ) : (
         <p className="text-muted-foreground text-center py-8">
@@ -365,18 +469,6 @@ function SurveyTab({ workshopId, surveyUrl }: { workshopId: string; surveyUrl?: 
     },
   })
 
-  const sendSurveyMutation = useMutation({
-    mutationFn: () => workshopApi.sendSurvey(workshopId),
-    onSuccess: (data) => {
-      showSuccessToast(
-        `설문 링크 전송 완료: ${data.sent}명 성공, ${data.failed}명 실패`
-      )
-    },
-    onError: () => {
-      showErrorToast("설문 링크 전송에 실패했습니다")
-    },
-  })
-
   const handleSaveUrl = () => {
     if (!urlInput.trim()) {
       showErrorToast("URL을 입력해 주세요")
@@ -445,30 +537,24 @@ function SurveyTab({ workshopId, surveyUrl }: { workshopId: string; surveyUrl?: 
         </CardContent>
       </Card>
 
-      {/* 설문 링크 공유 */}
+      {/* 설문 링크는 직접 공유 안내 (개인 이메일 미저장으로 이메일 전송 불가) */}
       <Card>
         <CardHeader>
           <CardTitle>설문 링크 공유</CardTitle>
           <CardDescription>
-            참가자에게 만족도 조사 링크를 이메일로 전송합니다
+            참가자에게 만족도 조사 링크를 직접 공유해 주세요
           </CardDescription>
         </CardHeader>
         <CardContent>
           {isSaved && urlInput ? (
             <div className="flex items-center gap-4">
-              <Button
-                onClick={() => sendSurveyMutation.mutate()}
-                disabled={sendSurveyMutation.isPending}
-              >
-                {sendSurveyMutation.isPending ? (
-                  <RefreshCw className="h-4 w-4 animate-spin mr-2" />
-                ) : (
-                  <Send className="h-4 w-4 mr-2" />
-                )}
-                {sendSurveyMutation.isPending
-                  ? "전송 중..."
-                  : "전체 참가자에게 전송"}
+              <Button variant="outline" onClick={copyToClipboard}>
+                <Copy className="h-4 w-4 mr-2" />
+                링크 복사
               </Button>
+              <p className="text-sm text-muted-foreground">
+                복사한 링크를 Teams, 채팅 등으로 참가자에게 공유하세요
+              </p>
             </div>
           ) : (
             <p className="text-muted-foreground text-sm">
@@ -778,7 +864,7 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
         </div>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-5">
         <Card className="flex items-center">
           <CardContent className="py-4 w-full">
             <div className="flex flex-col gap-2">
@@ -817,6 +903,7 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
             </div>
           </CardContent>
         </Card>
+        <VmSkuPolicyCard policy={workshop.policy} />
         <Card className="flex items-center">
           <CardContent className="py-4 w-full">
             <div className="flex flex-col gap-2">
@@ -865,7 +952,7 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
                 <div className="space-y-3">
                   {workshop.participants.map((participant, index) => (
                     <ParticipantRow
-                      key={participant.alias || participant.email || index}
+                      key={participant.alias || index}
                       participant={participant}
                       workshopId={workshop.id}
                       availableSubscriptions={workshop.available_subscriptions}

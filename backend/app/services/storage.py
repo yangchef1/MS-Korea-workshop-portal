@@ -5,43 +5,46 @@ azure.data.tables.aio를 사용하여 진정한 비동기 I/O를 제공한다.
 
 Tables:
 - workshops: 워크샵 메타데이터 (PartitionKey="workshop", RowKey=workshop_id)
-- passwords: 참가자 비밀번호 CSV (PartitionKey="password", RowKey=workshop_id)
 - templates: ARM 템플릿 (PartitionKey="template", RowKey=template_name)
 """
+import base64
+import gzip
 import json
 import logging
+import time
 from functools import lru_cache
 from typing import Any
 
 from azure.core.exceptions import HttpResponseError, ResourceNotFoundError
 from azure.core import MatchConditions
 from azure.data.tables.aio import TableServiceClient
-from azure.identity.aio import (
-    AzureCliCredential,
-    ClientSecretCredential,
-    DefaultAzureCredential,
-)
 from pydantic import ValidationError as PydanticValidationError
 
 from app.config import settings
-from app.exceptions import ValidationError as AppValidationError
+from app.exceptions import (
+    ConflictError,
+    EntityNotFoundError,
+    ValidationError as AppValidationError,
+)
 from app.models import DeletionFailureItem, WorkshopMetadata
+from app.services.credential import get_async_azure_credential
 
 logger = logging.getLogger(__name__)
 
 WORKSHOPS_TABLE = "workshops"
-PASSWORDS_TABLE = "passwords"
 TEMPLATES_TABLE = "templates"
 USERS_TABLE = "users"
 DELETION_FAILURES_TABLE = "deletionfailures"
 PORTAL_SETTINGS_TABLE = "portalsettings"
 
 WORKSHOP_PARTITION_KEY = "workshop"
-PASSWORD_PARTITION_KEY = "password"
 TEMPLATE_PARTITION_KEY = "template"
 USER_PARTITION_KEY = "user"
 PORTAL_SETTINGS_PARTITION_KEY = "config"
 PORTAL_SETTINGS_ROW_KEY_SUBSCRIPTIONS = "subscriptions"
+VM_SKUS_PARTITION_KEY = "vmskus"
+
+_VM_SKUS_TABLE_CACHE_TTL_SECONDS = 7 * 24 * 3600  # 7일
 
 _ACQUIRE_MAX_RETRIES = 3
 
@@ -61,7 +64,7 @@ class StorageService:
             account_url = (
                 f"https://{settings.table_storage_account}.table.core.windows.net"
             )
-            credential = self._create_credential()
+            credential = get_async_azure_credential()
 
             self.table_service_client = TableServiceClient(
                 endpoint=account_url,
@@ -75,31 +78,12 @@ class StorageService:
             logger.error("Failed to initialize Table Storage client: %s", e)
             raise
 
-    @staticmethod
-    def _create_credential() -> ClientSecretCredential | DefaultAzureCredential | AzureCliCredential:
-        """설정에 따라 적절한 비동기 Azure credential을 생성한다."""
-        if settings.azure_sp_tenant_id and settings.azure_sp_client_id and settings.azure_sp_client_secret:
-            return ClientSecretCredential(
-                tenant_id=settings.azure_sp_tenant_id,
-                client_id=settings.azure_sp_client_id,
-                client_secret=settings.azure_sp_client_secret,
-            )
-        if settings.use_azure_cli_credential:
-            return AzureCliCredential()
-        return DefaultAzureCredential(
-            exclude_shared_token_cache_credential=True,
-            exclude_visual_studio_code_credential=True,
-            exclude_azure_powershell_credential=True,
-            exclude_interactive_browser_credential=True,
-        )
-
     async def _ensure_tables_exist(self) -> None:
         """필요한 테이블이 존재하지 않으면 생성한다 (lazy 초기화)."""
         if StorageService._tables_initialized:
             return
         for table_name in (
             WORKSHOPS_TABLE,
-            PASSWORDS_TABLE,
             TEMPLATES_TABLE,
             USERS_TABLE,
             DELETION_FAILURES_TABLE,
@@ -214,7 +198,7 @@ class StorageService:
             raise
 
     async def delete_workshop_metadata(self, workshop_id: str) -> bool:
-        """워크샵 메타데이터와 관련 비밀번호를 삭제한다.
+        """워크샵 메타데이터를 삭제한다.
 
         Args:
             workshop_id: 워크샵 고유 식별자.
@@ -234,78 +218,10 @@ class StorageService:
                 row_key=workshop_id,
             )
 
-            try:
-                passwords_client = self.table_service_client.get_table_client(
-                    PASSWORDS_TABLE
-                )
-                await passwords_client.delete_entity(
-                    partition_key=PASSWORD_PARTITION_KEY,
-                    row_key=workshop_id,
-                )
-            except ResourceNotFoundError:
-                pass
-
             logger.info("Deleted workshop: %s", workshop_id)
             return True
         except Exception as e:
             logger.error("Failed to delete workshop: %s", e)
-            raise
-
-    # ------------------------------------------------------------------
-    # Passwords CSV
-    # ------------------------------------------------------------------
-
-    async def save_passwords_csv(self, workshop_id: str, csv_content: str) -> bool:
-        """참가자 비밀번호 CSV를 테이블 엔티티로 저장한다.
-
-        Args:
-            workshop_id: 워크샵 고유 식별자.
-            csv_content: CSV 문자열.
-
-        Returns:
-            성공 시 True.
-        """
-
-        await self._ensure_tables_exist()
-
-        try:
-            table_client = self.table_service_client.get_table_client(PASSWORDS_TABLE)
-            entity = {
-                "PartitionKey": PASSWORD_PARTITION_KEY,
-                "RowKey": workshop_id,
-                "csv_content": csv_content,
-            }
-            await table_client.upsert_entity(entity)
-            logger.info("Saved passwords CSV: %s", workshop_id)
-            return True
-        except Exception as e:
-            logger.error("Failed to save passwords CSV: %s", e)
-            raise
-
-    async def get_passwords_csv(self, workshop_id: str) -> str | None:
-        """비밀번호 CSV를 조회한다.
-
-        Args:
-            workshop_id: 워크샵 고유 식별자.
-
-        Returns:
-            CSV 문자열. 존재하지 않으면 None.
-        """
-
-        await self._ensure_tables_exist()
-
-        try:
-            table_client = self.table_service_client.get_table_client(PASSWORDS_TABLE)
-            entity = await table_client.get_entity(
-                partition_key=PASSWORD_PARTITION_KEY,
-                row_key=workshop_id,
-            )
-            return entity.get("csv_content", "")
-        except ResourceNotFoundError:
-            logger.warning("Passwords CSV not found: %s", workshop_id)
-            return None
-        except Exception as e:
-            logger.error("Failed to retrieve passwords CSV: %s", e)
             raise
 
     # ------------------------------------------------------------------
@@ -468,8 +384,6 @@ class StorageService:
         Raises:
             ConflictError: 재시도 한도 초과 시.
         """
-        from app.exceptions import ConflictError
-
         await self._ensure_tables_exist()
         table_client = self.table_service_client.get_table_client(PORTAL_SETTINGS_TABLE)
 
@@ -543,8 +457,6 @@ class StorageService:
         Args:
             subscription_ids: 해제할 구독 ID 목록.
         """
-        from app.exceptions import ConflictError
-
         if not subscription_ids:
             return
 
@@ -593,6 +505,76 @@ class StorageService:
                 ) from e
 
     # ------------------------------------------------------------------
+    # VM SKU cache
+    # ------------------------------------------------------------------
+
+    async def get_vm_sku_cache(
+        self, cache_key: str,
+    ) -> tuple[list[dict] | None, float | None]:
+        """Table Storage에서 VM SKU 캐시 데이터를 조회한다.
+
+        gzip 압축 데이터(skus_json_gz)를 우선 읽고, 없으면 비압축(skus_json)으로 폴백한다.
+
+        Args:
+            cache_key: 리전 조합 키 (정렬된 리전명 쉼표 구분, 예: 'eastus,koreacentral').
+
+        Returns:
+            (SKU 목록, 저장 시각 unix timestamp) 튜플.
+            데이터가 없으면 (None, None).
+        """
+        await self._ensure_tables_exist()
+        try:
+            table_client = self.table_service_client.get_table_client(PORTAL_SETTINGS_TABLE)
+            entity = await table_client.get_entity(
+                partition_key=VM_SKUS_PARTITION_KEY,
+                row_key=cache_key,
+            )
+            if "skus_json_gz" in entity:
+                # gzip 압축 데이터 (base64 encoded)
+                compressed = base64.b64decode(entity["skus_json_gz"])
+                skus = json.loads(gzip.decompress(compressed).decode())
+            else:
+                # 구버전 비압축 폴백
+                skus = json.loads(entity.get("skus_json", "[]"))
+            saved_at = float(entity.get("saved_at", 0))
+            return skus, saved_at
+        except ResourceNotFoundError:
+            return None, None
+        except Exception as e:
+            logger.error("Failed to get VM SKU cache (key: %s): %s", cache_key, e)
+            return None, None
+
+    async def set_vm_sku_cache(self, cache_key: str, skus: list[dict]) -> None:
+        """VM SKU 목록을 gzip 압축 후 Table Storage에 저장한다.
+
+        JSON → gzip → base64 변환 후 skus_json_gz 필드에 저장한다.
+        Azure Table Storage의 64KB 속성 제한(~140KB JSON) 우회.
+
+        Args:
+            cache_key: 리전 조합 키 (정렬된 리전명 쉼표 구분).
+            skus: 저장할 VM SKU 목록.
+        """
+        await self._ensure_tables_exist()
+        try:
+            compressed = base64.b64encode(
+                gzip.compress(json.dumps(skus).encode())
+            ).decode()
+            table_client = self.table_service_client.get_table_client(PORTAL_SETTINGS_TABLE)
+            entity = {
+                "PartitionKey": VM_SKUS_PARTITION_KEY,
+                "RowKey": cache_key,
+                "skus_json_gz": compressed,
+                "saved_at": str(time.time()),
+            }
+            await table_client.upsert_entity(entity)
+            logger.info(
+                "Saved VM SKU cache to Table Storage (key: %s, count: %d, compressed: %d bytes)",
+                cache_key, len(skus), len(compressed),
+            )
+        except Exception as e:
+            logger.error("Failed to save VM SKU cache (key: %s): %s", cache_key, e)
+
+    # ------------------------------------------------------------------
     # Templates
     # ------------------------------------------------------------------
 
@@ -619,8 +601,6 @@ class StorageService:
         Raises:
             ConflictError: 동일 이름의 템플릿이 이미 존재하는 경우.
         """
-        from app.exceptions import ConflictError
-
         await self._ensure_tables_exist()
 
         table_client = self.table_service_client.get_table_client(TEMPLATES_TABLE)
@@ -776,8 +756,6 @@ class StorageService:
         Raises:
             EntityNotFoundError: 템플릿이 존재하지 않는 경우.
         """
-        from app.exceptions import EntityNotFoundError
-
         await self._ensure_tables_exist()
 
         table_client = self.table_service_client.get_table_client(TEMPLATES_TABLE)
@@ -820,8 +798,6 @@ class StorageService:
         Raises:
             EntityNotFoundError: 템플릿이 존재하지 않는 경우.
         """
-        from app.exceptions import EntityNotFoundError
-
         await self._ensure_tables_exist()
 
         table_client = self.table_service_client.get_table_client(TEMPLATES_TABLE)
@@ -991,6 +967,7 @@ def _workshop_to_entity(workshop_id: str, metadata: dict[str, Any]) -> dict[str,
         "status": metadata.get("status", "active"),
         "created_at": metadata.get("created_at", ""),
         "created_by": metadata.get("created_by", ""),
+        "description": metadata.get("description", ""),
         "survey_url": metadata.get("survey_url", ""),
         # JSON-serialized complex fields
         "participants_json": json.dumps(
@@ -1011,6 +988,7 @@ def _entity_to_workshop(entity: dict[str, Any]) -> dict[str, Any]:
         "status": entity.get("status", "active"),
         "created_at": entity.get("created_at", ""),
         "created_by": entity.get("created_by"),
+        "description": entity.get("description"),
         "survey_url": entity.get("survey_url", ""),
         "participants": json.loads(entity.get("participants_json", "[]")),
         "policy": json.loads(entity.get("policy_json", "{}")),

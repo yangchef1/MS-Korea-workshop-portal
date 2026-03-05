@@ -1,10 +1,20 @@
 import { createFileRoute } from "@tanstack/react-router"
-import { useSuspenseQuery } from "@tanstack/react-query"
+import { useQuery, useSuspenseQuery } from "@tanstack/react-query"
 import { Suspense } from "react"
 import { Link } from "@tanstack/react-router"
-import { Plus, Calendar, Users, MapPin, AlertCircle } from "lucide-react"
+import {
+  Plus,
+  Calendar,
+  Users,
+  AlertCircle,
+  Info,
+  Monitor,
+  CheckCircle2,
+  Shield,
+  User,
+} from "lucide-react"
 
-import { workshopApi, type Workshop } from "@/client"
+import { workshopApi, subscriptionApi, type Workshop } from "@/client"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -35,6 +45,14 @@ function WorkshopCard({ workshop }: { workshop: Workshop }) {
     deleted: "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300",
   }
 
+  const formatDate = (dateStr: string) =>
+    new Date(dateStr).toLocaleString("ko-KR", {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    })
+
   return (
     <Link to="/workshops/$workshopId" params={{ workshopId: workshop.id }}>
       <Card className="hover:shadow-md transition-shadow cursor-pointer">
@@ -50,21 +68,25 @@ function WorkshopCard({ workshop }: { workshop: Workshop }) {
               {workshop.status}
             </span>
           </div>
-          <CardDescription>{workshop.description}</CardDescription>
+          {workshop.description && (
+            <CardDescription>{workshop.description}</CardDescription>
+          )}
         </CardHeader>
         <CardContent>
           <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
-            <div className="flex items-center gap-1">
-              <MapPin className="h-4 w-4" />
-              {workshop.region}
-            </div>
+            {workshop.created_by && (
+              <div className="flex items-center gap-1">
+                <User className="h-4 w-4" />
+                {workshop.created_by}
+              </div>
+            )}
             <div className="flex items-center gap-1">
               <Users className="h-4 w-4" />
               {workshop.participant_count ?? workshop.participants?.length ?? 0} 참가자
             </div>
             <div className="flex items-center gap-1">
               <Calendar className="h-4 w-4" />
-              {new Date(workshop.start_date).toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+              {formatDate(workshop.start_date)} ~ {formatDate(workshop.end_date)}
             </div>
           </div>
         </CardContent>
@@ -147,6 +169,86 @@ function WorkshopsList() {
   )
 }
 
+function SubscriptionSummary() {
+  const { data, isLoading } = useQuery({
+    queryKey: ["subscriptions"],
+    queryFn: () => subscriptionApi.get(),
+  })
+
+  if (isLoading) {
+    return (
+      <div className="grid gap-4 md:grid-cols-3">
+        {[1, 2, 3].map((i) => (
+          <Card key={i} className="animate-pulse">
+            <CardHeader className="pb-2">
+              <div className="h-4 bg-muted rounded w-1/2"></div>
+            </CardHeader>
+            <CardContent>
+              <div className="h-8 bg-muted rounded w-1/3"></div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    )
+  }
+
+  if (!data) return null
+
+  const totalCount = data.subscriptions.length
+  const inUseCount = Object.keys(data.in_use_map ?? {}).length
+  const availableCount = totalCount - inUseCount
+
+  const summaryItems = [
+    {
+      label: "전체 구독",
+      value: totalCount,
+      icon: Shield,
+      color: "text-blue-600 dark:text-blue-400",
+      bgColor: "bg-blue-50 dark:bg-blue-950",
+    },
+    {
+      label: "사용 중",
+      value: inUseCount,
+      icon: Monitor,
+      color: "text-orange-600 dark:text-orange-400",
+      bgColor: "bg-orange-50 dark:bg-orange-950",
+    },
+    {
+      label: "사용 가능",
+      value: availableCount,
+      icon: CheckCircle2,
+      color: "text-green-600 dark:text-green-400",
+      bgColor: "bg-green-50 dark:bg-green-950",
+    },
+  ]
+
+  return (
+    <div className="space-y-3">
+      <div className="grid gap-4 md:grid-cols-3">
+        {summaryItems.map((item) => (
+          <Card key={item.label}>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                {item.label}
+              </CardTitle>
+              <div className={`rounded-md p-1.5 ${item.bgColor}`}>
+                <item.icon className={`h-4 w-4 ${item.color}`} />
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{item.value}</div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+      <div className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-300">
+        <Info className="h-4 w-4 shrink-0" />
+        <span>추가 구독 필요 시, Junghun Lee님께 문의하세요.</span>
+      </div>
+    </div>
+  )
+}
+
 function Dashboard() {
   const { user } = useAuth()
 
@@ -162,6 +264,8 @@ function Dashboard() {
           </p>
         </div>
       </div>
+
+      <SubscriptionSummary />
 
       <WorkshopsList />
     </div>

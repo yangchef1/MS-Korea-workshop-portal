@@ -253,7 +253,7 @@ export interface SubscriptionSettingsResponse {
 export interface Participant {
   alias?: string
   name?: string
-  email: string
+  upn?: string
   resource_group?: string
   user_principal_name?: string
   subscription_id?: string
@@ -268,12 +268,16 @@ export interface Workshop {
   policy?: {
     allowed_regions: string[]
     denied_services: string[]
+    allowed_vm_skus?: string[]
+    vm_sku_preset?: string
   }
+  allowed_regions?: string[]
   start_date: string
   end_date: string
   participants?: Participant[]
   participant_count?: number
   created_at: string
+  created_by?: string
   updated_at?: string
   survey_url?: string
   available_subscriptions?: SubscriptionInfo[]
@@ -351,6 +355,21 @@ export interface ResourceType {
   category: string
 }
 
+/** VM SKU 정보. */
+export interface VmSku {
+  name: string
+  family: string
+  vcpus: number
+  memory_gb: number
+}
+
+/** VM SKU 프리셋: key → { label, description, skus }. */
+export type VmSkuPresets = Record<string, {
+  label: string
+  description: string
+  skus: string[]
+}>
+
 /** Deletion failure resource type. */
 export type DeletionFailureResourceType = "resource_group" | "user"
 
@@ -381,8 +400,11 @@ export interface CreateWorkshopRequest {
   base_resources_template: string
   allowed_regions: string  // comma-separated
   denied_services: string  // comma-separated
+  allowed_vm_skus?: string  // comma-separated
+  vm_sku_preset?: string
   participants_file: File
   survey_url?: string
+  description?: string
 }
 
 // API Error type
@@ -397,14 +419,6 @@ export const handleApiError = (error: AxiosError<ApiError>): string => {
     return error.response.data.detail
   }
   return error.message || "An unexpected error occurred"
-}
-
-/** Email send result. */
-export interface EmailSendResponse {
-  total: number
-  sent: number
-  failed: number
-  results: Record<string, boolean>
 }
 
 // Workshop API
@@ -430,6 +444,15 @@ export const workshopApi = {
     formData.append("participants_file", data.participants_file)
     if (data.survey_url) {
       formData.append("survey_url", data.survey_url)
+    }
+    if (data.description) {
+      formData.append("description", data.description)
+    }
+    if (data.allowed_vm_skus) {
+      formData.append("allowed_vm_skus", data.allowed_vm_skus)
+    }
+    if (data.vm_sku_preset) {
+      formData.append("vm_sku_preset", data.vm_sku_preset)
     }
 
     const response = await apiClient.post<Workshop>("/workshops", formData, {
@@ -479,6 +502,27 @@ export const workshopApi = {
     return response.data
   },
 
+  /**
+   * 지정된 모든 리전에서 공통으로 지원되는 VM SKU 교집합을 조회한다.
+   *
+   * 서버에서 교집합을 계산하여 24시간 캐시로 반환한다.
+   *
+   * @param regions - 교집합 대상 리전 목록.
+   * @returns 모든 리전에서 지원되는 VM SKU 목록.
+   */
+  getCommonVmSkus: async (regions: string[]): Promise<VmSku[]> => {
+    const response = await apiClient.get<VmSku[]>("/workshops/vm-skus/common", {
+      params: { regions: regions.join(",") },
+    })
+    return response.data
+  },
+
+  /** VM SKU 프리셋 목록을 조회한다. */
+  getVmSkuPresets: async (): Promise<VmSkuPresets> => {
+    const response = await apiClient.get<VmSkuPresets>("/workshops/vm-sku-presets")
+    return response.data
+  },
+
   /** 워크샵의 만족도 조사 URL을 등록 또는 수정한다. */
   updateSurveyUrl: async (id: string, surveyUrl: string): Promise<void> => {
     await apiClient.patch(`/workshops/${id}/survey-url`, {
@@ -486,19 +530,8 @@ export const workshopApi = {
     })
   },
 
-  /** 워크샵 참가자에게 만족도 조사 이메일을 전송한다. */
-  sendSurvey: async (
-    id: string,
-    emails?: string[]
-  ): Promise<EmailSendResponse> => {
-    const params = emails ? { participant_emails: emails } : {}
-    const response = await apiClient.post<EmailSendResponse>(
-      `/workshops/${id}/send-survey`,
-      null,
-      { params }
-    )
-    return response.data
-  },
+  // sendSurvey removed: personal emails are no longer stored (compliance).
+  // Survey links should be shared via Teams, chat, etc.
 
   /** 워크샵의 삭제 실패 항목 목록을 조회한다. */
   getDeletionFailures: async (
@@ -544,10 +577,10 @@ export const workshopApi = {
   },
 }
 
-export const subscriptionAdminApi = {
+export const subscriptionApi = {
   get: async (refresh = false): Promise<SubscriptionSettingsResponse> => {
     const response = await apiClient.get<SubscriptionSettingsResponse>(
-      "/admin/subscriptions",
+      "/subscriptions",
       { params: { refresh } }
     )
     return response.data

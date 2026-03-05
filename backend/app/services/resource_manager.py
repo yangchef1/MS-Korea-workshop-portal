@@ -16,14 +16,10 @@ import uuid
 from functools import lru_cache
 from typing import Any
 
-from azure.identity.aio import (
-    AzureCliCredential,
-    ClientSecretCredential,
-    DefaultAzureCredential,
-)
 from azure.mgmt.authorization.aio import AuthorizationManagementClient
 from azure.mgmt.authorization.models import RoleAssignmentCreateParameters
 from azure.mgmt.resource.resources.aio import ResourceManagementClient
+from azure.mgmt.compute.aio import ComputeManagementClient
 from azure.mgmt.resource.resources.models import (
     Deployment,
     DeploymentMode,
@@ -32,10 +28,12 @@ from azure.mgmt.resource.resources.models import (
 )
 
 from app.config import settings
+from app.services.credential import get_async_azure_credential
 
 logger = logging.getLogger(__name__)
 
 _RESOURCE_TYPES_CACHE_TTL = 86400  # 24시간
+_VM_SKUS_CACHE_TTL = 86400  # 24시간
 
 
 class ResourceManagerService:
@@ -48,34 +46,20 @@ class ResourceManagerService:
     _resource_types_cache: dict[str, dict[str, str]] = {}
     _resource_types_cache_time: float = 0
     _role_definition_cache: dict[tuple[str, str], str] = {}
+    _vm_skus_cache: dict[str, list[dict[str, Any]]] = {}
+    _vm_skus_cache_time: dict[str, float] = {}
+    _common_vm_skus_cache: dict[str, list[dict[str, Any]]] = {}
+    _common_vm_skus_cache_time: dict[str, float] = {}
 
     def __init__(self) -> None:
         """Azure Resource Manager 서비스를 초기화한다."""
         try:
-            self._credential = self._create_credential()
+            self._credential = get_async_azure_credential()
             self._default_subscription_id = settings.azure_subscription_id
             logger.info("Initialized async Resource Manager service")
         except Exception as e:
             logger.error("Failed to initialize Resource Manager client: %s", e)
             raise
-
-    @staticmethod
-    def _create_credential() -> ClientSecretCredential | DefaultAzureCredential | AzureCliCredential:
-        """설정에 따라 적절한 비동기 Azure credential을 생성한다."""
-        if settings.azure_sp_tenant_id and settings.azure_sp_client_id and settings.azure_sp_client_secret:
-            return ClientSecretCredential(
-                tenant_id=settings.azure_sp_tenant_id,
-                client_id=settings.azure_sp_client_id,
-                client_secret=settings.azure_sp_client_secret,
-            )
-        if settings.use_azure_cli_credential:
-            return AzureCliCredential()
-        return DefaultAzureCredential(
-            exclude_shared_token_cache_credential=True,
-            exclude_visual_studio_code_credential=True,
-            exclude_azure_powershell_credential=True,
-            exclude_interactive_browser_credential=True,
-        )
 
     def _get_resource_client(
         self, subscription_id: str | None = None,
@@ -378,34 +362,6 @@ class ResourceManagerService:
             logger.error("Failed to deploy template: %s", e)
             raise
 
-    async def get_resource_group(
-        self, name: str, subscription_id: str | None = None,
-    ) -> dict[str, Any] | None:
-        """리소스 그룹 상세 정보를 조회한다.
-
-        Args:
-            name: 리소스 그룹 이름.
-            subscription_id: 대상 구독 ID. 미지정 시 기본 구독 사용.
-
-        Returns:
-            리소스 그룹 상세 정보. 존재하지 않으면 None.
-        """
-        try:
-            resource_client = self._get_resource_client(subscription_id)
-            rg = await resource_client.resource_groups.get(name)
-
-            return {
-                'name': rg.name,
-                'location': rg.location,
-                'id': rg.id,
-                'tags': rg.tags,
-                'provisioning_state': rg.properties.provisioning_state
-            }
-
-        except Exception:
-            logger.warning("Resource group not found: %s", name)
-            return None
-
     async def list_resources_in_group(
         self,
         resource_group_name: str,
@@ -446,47 +402,210 @@ class ResourceManagerService:
             logger.error("Failed to list resources in %s: %s", resource_group_name, e)
             return []
 
-    async def list_resource_groups(
+    def _get_compute_client(
+        self, subscription_id: str | None = None,
+    ) -> ComputeManagementClient:
+        """특정 구독의 비동기 ComputeManagementClient를 반환한다."""
+        sub_id = subscription_id or self._default_subscription_id
+        return ComputeManagementClient(
+            credential=self._credential,
+            subscription_id=sub_id,
+        )
+
+    async def list_vm_skus(
         self,
+        location: str,
         subscription_id: str | None = None,
-        tag_filter: dict[str, str] | None = None,
     ) -> list[dict[str, Any]]:
-        """구독 내 리소스 그룹 목록을 조회한다.
+        """특정 리전의 VM SKU 목록을 조회한다.
+
+        Azure Compute API에서 리소스 SKU를 조회하여 VM 관련 SKU만
+        필터링한다. 결과는 리전별 24시간 캐시된다.
 
         Args:
+            location: Azure 리전 (예: 'koreacentral').
             subscription_id: 대상 구독 ID. 미지정 시 기본 구독 사용.
-            tag_filter: 태그 필터. 지정 시 해당 태그를 가진 RG만 반환.
 
         Returns:
-            리소스 그룹 목록.
+            name, family, vcpus, memory_gb를 포함하는 VM SKU 목록.
         """
+        cls = type(self)
+        current_time = time.time()
+        cached = cls._vm_skus_cache.get(location)
+        cache_time = cls._vm_skus_cache_time.get(location, 0)
+
+        if cached and (current_time - cache_time) < _VM_SKUS_CACHE_TTL:
+            logger.debug("Returning cached VM SKUs for %s", location)
+            return cached
+
         try:
-            resource_client = self._get_resource_client(subscription_id)
-            rgs = []
-            async for rg in resource_client.resource_groups.list():
-                if tag_filter and rg.tags:
-                    if not all(
-                        rg.tags.get(k) == v for k, v in tag_filter.items()
-                    ):
+            logger.info("Fetching VM SKUs from Azure for location: %s", location)
+            async with self._get_compute_client(subscription_id) as compute_client:
+                skus: list[dict[str, Any]] = []
+
+                async for sku in compute_client.resource_skus.list(
+                    filter=f"location eq '{location}'"
+                ):
+                    # VM 관련 SKU만 필터링
+                    if sku.resource_type != "virtualMachines":
                         continue
-                elif tag_filter:
-                    continue
 
-                rgs.append({
-                    "name": rg.name,
-                    "location": rg.location,
-                    "id": rg.id,
-                    "tags": rg.tags or {},
-                    "subscription_id": subscription_id or self._default_subscription_id,
-                })
+                    vcpus = 0
+                    memory_gb = 0.0
+                    family = sku.family or ""
 
-            return rgs
+                    for capability in (sku.capabilities or []):
+                        if capability.name == "vCPUs":
+                            vcpus = int(capability.value)
+                        elif capability.name == "MemoryGB":
+                            memory_gb = float(capability.value)
+
+                    skus.append({
+                        "name": sku.name,
+                        "family": family,
+                        "vcpus": vcpus,
+                        "memory_gb": memory_gb,
+                    })
+
+                # 이름순 정렬
+                skus.sort(key=lambda s: s["name"])
+
+                cls._vm_skus_cache[location] = skus
+                cls._vm_skus_cache_time[location] = current_time
+                logger.info("Cached %d VM SKUs for %s", len(skus), location)
+                return skus
+
+        except Exception as e:
+            logger.error("Failed to list VM SKUs for %s: %s", location, e)
+            if cached:
+                logger.warning("Returning expired VM SKU cache for %s", location)
+                return cached
+            return []
+
+    async def list_common_vm_skus(
+        self,
+        regions: list[str],
+        subscription_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """지정된 모든 리전에서 공통으로 지원되는 VM SKU 교집합을 조회한다.
+
+        각 리전별로 ``location eq '{region}'`` 필터를 사용하여 병렬 조회한 뒤,
+        모든 리전에 공통으로 존재하는 VM SKU만 반환한다.
+        결과는 리전 조합별로 24시간 캐시된다.
+
+        Note:
+            ``resourceType eq 'virtualMachines'`` 필터는 Azure API에서
+            서버 사이드 필터링을 지원하지 않아 전체 SKU(6만여 건, ~100MB)를
+            반환하므로 사용하지 않는다.
+
+        Args:
+            regions: 교집합 대상 리전 목록 (예: ['koreacentral', 'eastus']).
+            subscription_id: 대상 구독 ID. 미지정 시 기본 구독 사용.
+
+        Returns:
+            name, family, vcpus, memory_gb를 포함하는 VM SKU 목록.
+        """
+        if not regions:
+            return []
+
+        target_regions = [r.lower() for r in regions]
+        cache_key = ",".join(sorted(target_regions))
+
+        cls = type(self)
+        current_time = time.time()
+        cached = cls._common_vm_skus_cache.get(cache_key)
+        cache_time = cls._common_vm_skus_cache_time.get(cache_key, 0)
+
+        if cached and (current_time - cache_time) < _VM_SKUS_CACHE_TTL:
+            logger.debug("Returning cached common VM SKUs (regions: %s)", cache_key)
+            return cached
+
+        # Table Storage 캐시 확인 (7일 TTL)
+        try:
+            from app.services.storage import storage_service
+            from app.services.storage import _VM_SKUS_TABLE_CACHE_TTL_SECONDS
+            table_skus, table_saved_at = await storage_service.get_vm_sku_cache(cache_key)
+            if table_skus is not None and table_saved_at is not None:
+                is_fresh = (current_time - table_saved_at) < _VM_SKUS_TABLE_CACHE_TTL_SECONDS
+                # Empty cache for multiple regions is almost certainly stale/failed
+                is_valid = len(table_skus) > 0 or len(target_regions) <= 1
+                if is_fresh and is_valid:
+                    logger.info(
+                        "Returning Table Storage VM SKU cache (regions: %s, age: %.1fh)",
+                        cache_key, (current_time - table_saved_at) / 3600,
+                    )
+                    cls._common_vm_skus_cache[cache_key] = table_skus
+                    cls._common_vm_skus_cache_time[cache_key] = current_time
+                    return table_skus
+                if not is_valid:
+                    logger.warning(
+                        "Ignoring empty Table Storage VM SKU cache (regions: %s)",
+                        cache_key,
+                    )
+        except Exception as e:
+            logger.warning("Table Storage VM SKU cache lookup failed (non-fatal): %s", e)
+
+        try:
+            logger.info("Fetching common VM SKUs from Azure (regions: %s)", cache_key)
+
+            # 각 리전별 SKU를 병렬 조회 (location 필터는 서버 사이드 지원됨)
+            region_results = await asyncio.gather(
+                *(self.list_vm_skus(region, subscription_id) for region in target_regions)
+            )
+
+            # 첫 번째 리전의 SKU 이름 집합에서 시작하여 교집합 계산
+            common_names: set[str] = {sku["name"] for sku in region_results[0]}
+            for region_skus in region_results[1:]:
+                common_names &= {sku["name"] for sku in region_skus}
+
+            # 첫 번째 리전의 상세 정보를 기준으로 교집합 SKU만 추출
+            skus = [
+                sku for sku in region_results[0]
+                if sku["name"] in common_names
+            ]
+            skus.sort(key=lambda s: s["name"])
+
+            cls._common_vm_skus_cache[cache_key] = skus
+            cls._common_vm_skus_cache_time[cache_key] = current_time
+            logger.info(
+                "Cached %d common VM SKUs for regions: %s", len(skus), cache_key
+            )
+
+            # 실시간 조회 결과를 Table Storage에도 저장
+            try:
+                from app.services.storage import storage_service
+                await storage_service.set_vm_sku_cache(cache_key, skus)
+            except Exception as e:
+                logger.warning("Failed to persist VM SKU cache to Table Storage (non-fatal): %s", e)
+
+            return skus
 
         except Exception as e:
             logger.error(
-                "Failed to list resource groups (subscription: %s): %s",
-                subscription_id or "default", e,
+                "Failed to list common VM SKUs (regions: %s): %s", cache_key, e
             )
+            # Fallback 1: 만료된 인메모리 캐시
+            if cached:
+                logger.warning(
+                    "Returning expired in-memory VM SKU cache for %s", cache_key
+                )
+                return cached
+
+            # Fallback 2: 만료된 Table Storage 캐시 (서버 재시작 직후 등)
+            try:
+                from app.services.storage import storage_service
+                stale_skus, _ = await storage_service.get_vm_sku_cache(cache_key)
+                if stale_skus:
+                    logger.warning(
+                        "Returning stale Table Storage VM SKU cache for %s (%d SKUs)",
+                        cache_key, len(stale_skus),
+                    )
+                    cls._common_vm_skus_cache[cache_key] = stale_skus
+                    cls._common_vm_skus_cache_time[cache_key] = current_time
+                    return stale_skus
+            except Exception as fallback_err:
+                logger.warning("Table Storage fallback also failed: %s", fallback_err)
+
             return []
 
     async def get_resource_types(

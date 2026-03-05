@@ -173,21 +173,23 @@ def _validate_no_duplicates(participants: list[dict[str, str]]) -> None:
 def generate_passwords_csv(participants: list[dict[str, str]]) -> str:
     """참가자 인증정보 CSV 콘텐츠를 생성한다.
 
+    개인 이메일은 포함하지 않는다 (컴플라이언스).
+    UPN(onmicrosoft.com)과 초기 비밀번호만 포함한다.
+
     Args:
-        participants: alias, email, upn, password, subscription_id를 포함하는
+        participants: alias, upn, password, subscription_id를 포함하는
             참가자 딕셔너리 목록.
 
     Returns:
         CSV 문자열.
     """
     output = io.StringIO()
-    fieldnames = ['email', 'alias', 'upn', 'password', 'subscription_id', 'resource_group']
+    fieldnames = ['alias', 'upn', 'password', 'subscription_id', 'resource_group']
     writer = csv.DictWriter(output, fieldnames=fieldnames)
     writer.writeheader()
 
     for participant in participants:
         writer.writerow({
-            'email': participant.get('email', ''),
             'alias': participant['alias'],
             'upn': participant['upn'],
             'password': participant['password'],

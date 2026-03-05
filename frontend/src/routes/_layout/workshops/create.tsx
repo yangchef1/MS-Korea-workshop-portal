@@ -1,7 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { useState, useEffect, useRef } from "react"
-import { ArrowLeft, Upload, Plus, Trash2, X } from "lucide-react"
+import { useState, useEffect, useRef, useMemo } from "react"
+import { ArrowLeft, ChevronDown, Upload, Plus, Trash2, X } from "lucide-react"
 import { Link } from "@tanstack/react-router"
 
 import { workshopApi, type CreateWorkshopRequest } from "@/client"
@@ -14,6 +14,14 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import useCustomToast from "@/hooks/useCustomToast"
@@ -36,27 +44,39 @@ function CreateWorkshop() {
 
   const [formData, setFormData] = useState({
     name: "",
-    region: "koreacentral",
     start_date: "",
     end_date: "",
     infra_template: "",
     survey_url: "",
+    description: "",
   })
 
+  const [selectedRegions, setSelectedRegions] = useState<string[]>(["koreacentral"])
   const [selectedServices, setSelectedServices] = useState<string[]>([])
+  const [selectedPreset, setSelectedPreset] = useState<string>("")
+  const [selectedVmSkus, setSelectedVmSkus] = useState<string[]>([])
   const [participants, setParticipants] = useState<ParticipantInput[]>([
     { email: "" },
   ])
 
   // Korea regions + Early access regions where new features are deployed first
-  const regions = [
-    "koreacentral",    // Korea Central (Seoul)
-    "koreasouth",      // Korea South (Busan)
-    "eastus",          // East US - Early access region
-    "eastus2",         // East US 2 - Early access region
-    "westus2",         // West US 2 - Early access region
-    "westcentralus",   // West Central US - EUAP canary region
+  const regions: { value: string; label: string }[] = [
+    { value: "koreacentral", label: "Korea Central (Seoul)" },
+    { value: "koreasouth", label: "Korea South (Busan)" },
+    { value: "eastus", label: "East US" },
+    { value: "eastus2", label: "East US 2" },
+    { value: "westus2", label: "West US 2" },
+    { value: "westcentralus", label: "West Central US (EUAP)" },
   ]
+  const selectedRegionLabels = regions
+    .filter((region) => selectedRegions.includes(region.value))
+    .map((region) => region.label)
+  const selectedRegionSummary =
+    selectedRegionLabels.length === 0
+      ? "허용 리전 선택"
+      : selectedRegionLabels.length <= 2
+        ? selectedRegionLabels.join(", ")
+        : `${selectedRegionLabels.slice(0, 2).join(", ")} 외 ${selectedRegionLabels.length - 2}개`
 
   const { data: templates = [], isLoading: isTemplatesLoading } = useQuery({
     queryKey: ["workshop-templates"],
@@ -69,6 +89,43 @@ function CreateWorkshop() {
     queryFn: workshopApi.getResourceTypes,
     enabled: isAuthenticated,
   })
+
+  const { data: vmSkuPresets } = useQuery({
+    queryKey: ["vm-sku-presets"],
+    queryFn: workshopApi.getVmSkuPresets,
+    enabled: isAuthenticated,
+  })
+
+  const { data: vmSkus = [] } = useQuery({
+    queryKey: ["vm-skus-common", regions.map((r) => r.value)],
+    queryFn: () => workshopApi.getCommonVmSkus(regions.map((r) => r.value)),
+    enabled: isAuthenticated,
+  })
+
+  // VM 리소스 차단 시 VM SKU 선택 비활성화
+  const isVmBlocked = useMemo(
+    () => selectedServices.includes("Microsoft.Compute/virtualMachines"),
+    [selectedServices]
+  )
+
+  // VM 리소스 차단 시 SKU 선택 초기화
+  useEffect(() => {
+    if (isVmBlocked) {
+      setSelectedPreset("")
+      setSelectedVmSkus([])
+    }
+  }, [isVmBlocked])
+
+  useEffect(() => {
+    if (isVmBlocked) {
+      return
+    }
+
+    const availableSkuNames = new Set(vmSkus.map((sku) => sku.name))
+    setSelectedVmSkus((previousSkus) =>
+      previousSkus.filter((sku) => availableSkuNames.has(sku))
+    )
+  }, [isVmBlocked, vmSkus])
 
   // API 데이터 도착 시 default 선택을 실제 리소스 타입에 맞춰 동기화
   const hasInitializedDefaults = useRef(false)
@@ -118,6 +175,11 @@ function CreateWorkshop() {
       return
     }
 
+    if (selectedRegions.length === 0) {
+      showErrorToast("최소 한 개의 리전을 선택해주세요")
+      return
+    }
+
     // 참가자 이메일을 CSV Blob으로 변환
     const csvContent = "email\n" + validParticipants.map(p => p.email.trim()).join("\n")
     const csvBlob = new Blob([csvContent], { type: "text/csv" })
@@ -128,10 +190,13 @@ function CreateWorkshop() {
       start_date: formData.start_date,
       end_date: formData.end_date,
       base_resources_template: formData.infra_template || "none",
-      allowed_regions: formData.region,
+      allowed_regions: selectedRegions.join(","),
       denied_services: selectedServices.join(","),
+      allowed_vm_skus: selectedVmSkus.length > 0 ? selectedVmSkus.join(",") : undefined,
+      vm_sku_preset: selectedPreset || undefined,
       participants_file: csvFile,
       survey_url: formData.survey_url || undefined,
+      description: formData.description || undefined,
     })
   }
 
@@ -216,23 +281,71 @@ function CreateWorkshop() {
                   required
                 />
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="region">Azure 리전 *</Label>
-                <select
-                  id="region"
-                  value={formData.region}
-                  onChange={(e) =>
-                    setFormData({ ...formData, region: e.target.value })
-                  }
-                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                >
-                  {regions?.map((region) => (
-                    <option key={region} value={region}>
-                      {region}
-                    </option>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="description">워크샵 설명 (선택)</Label>
+              <textarea
+                id="description"
+                value={formData.description}
+                onChange={(e) =>
+                  setFormData({ ...formData, description: e.target.value })
+                }
+                placeholder="예: Azure 기초 워크샵으로 VM, Storage, Network 등을 다룹니다."
+                rows={2}
+                className="flex w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring resize-none"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label>허용 Azure 리전 *</Label>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full justify-between font-normal"
+                  >
+                    <span className="truncate text-left">{selectedRegionSummary}</span>
+                    <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent className="w-[320px]" align="start">
+                  <DropdownMenuLabel>허용 Azure 리전</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  {regions.map((region) => (
+                    <DropdownMenuCheckboxItem
+                      key={region.value}
+                      checked={selectedRegions.includes(region.value)}
+                      onSelect={(event) => event.preventDefault()}
+                      onCheckedChange={(checked) => {
+                        setSelectedRegions((prev) =>
+                          checked === true
+                            ? prev.includes(region.value)
+                              ? prev
+                              : [...prev, region.value]
+                            : prev.filter((r) => r !== region.value)
+                        )
+                      }}
+                    >
+                      {region.label}
+                    </DropdownMenuCheckboxItem>
                   ))}
-                </select>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <div className="flex flex-wrap gap-2">
+                {selectedRegionLabels.map((label) => (
+                  <span
+                    key={label}
+                    className="inline-flex items-center rounded-md bg-primary/10 px-2 py-1 text-xs text-primary"
+                  >
+                    {label}
+                  </span>
+                ))}
               </div>
+              <p className="text-xs text-muted-foreground">
+                참가자가 리소스를 생성할 수 있는 리전을 선택하세요. 최소 1개 필수.
+              </p>
             </div>
 
             <div className="space-y-2">
@@ -293,6 +406,98 @@ function CreateWorkshop() {
               <p className="text-xs text-muted-foreground">
                 워크샵에서 차단할 Azure 리소스를 선택하세요. 선택하지 않으면 모든 리소스가 허용됩니다.
               </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="vm_sku_preset">VM 크기 제한</Label>
+              {isVmBlocked ? (
+                <p className="text-sm text-muted-foreground italic">
+                  VM이 차단되어 있어 VM 크기 제한을 설정할 수 없습니다.
+                </p>
+              ) : (
+                <>
+                  <select
+                    id="vm_sku_preset"
+                    value={selectedPreset}
+                    onChange={(e) => {
+                      const preset = e.target.value
+                      setSelectedPreset(preset)
+                      if (preset && vmSkuPresets?.[preset]) {
+                        const availableSkuNames = new Set(
+                          vmSkus.map((sku) => sku.name)
+                        )
+                        setSelectedVmSkus(
+                          vmSkuPresets[preset].skus.filter((sku) =>
+                            availableSkuNames.has(sku)
+                          )
+                        )
+                      } else {
+                        setSelectedVmSkus([])
+                      }
+                    }}
+                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring text-muted-foreground"
+                  >
+                    <option value="">제한 없음 (모든 VM 크기 허용)</option>
+                    {vmSkuPresets && Object.entries(vmSkuPresets).map(([key, preset]) => (
+                      <option key={key} value={key}>
+                        {preset.label} — {preset.description}
+                      </option>
+                    ))}
+                  </select>
+
+                  {selectedVmSkus.length > 0 && (
+                    <div className="flex flex-wrap gap-2 mt-2">
+                      {selectedVmSkus.map((sku) => (
+                        <span
+                          key={sku}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-primary/10 text-primary text-sm"
+                        >
+                          {sku}
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setSelectedVmSkus(
+                                selectedVmSkus.filter((s) => s !== sku)
+                              )
+                            }
+                            className="hover:bg-primary/20 rounded-full p-0.5"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="flex gap-2 mt-2">
+                    <select
+                      value=""
+                      onChange={(e) => {
+                        const value = e.target.value
+                        if (value && !selectedVmSkus.includes(value)) {
+                          setSelectedVmSkus([...selectedVmSkus, value])
+                          if (selectedPreset) setSelectedPreset("")
+                        }
+                      }}
+                      className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring text-muted-foreground"
+                    >
+                      <option value="">커스텀 SKU 추가...</option>
+                      {vmSkus
+                        .filter((sku) => !selectedVmSkus.includes(sku.name))
+                        .map((sku) => (
+                          <option key={sku.name} value={sku.name}>
+                            {sku.name} ({sku.vcpus}vCPU, {sku.memory_gb}GB)
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+
+                  <p className="text-xs text-muted-foreground">
+                    선택한 모든 리전에 공통으로 배포 가능한 VM SKU만 표시됩니다.
+                    프리셋을 선택하거나 직접 허용할 SKU를 추가하세요. 미선택 시 모든 VM 크기가 허용됩니다.
+                  </p>
+                </>
+              )}
             </div>
 
             <div className="grid gap-4 md:grid-cols-2">

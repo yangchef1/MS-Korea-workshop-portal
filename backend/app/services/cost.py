@@ -327,49 +327,6 @@ class CostService:
             "breakdown": breakdown,
         }
 
-    async def get_subscription_cost(
-        self,
-        days: int = 30,
-        subscription_id: Optional[str] = None,
-    ) -> dict:
-        """구독 전체 비용을 조회한다.
-
-        Args:
-            days: 조회 일수.
-            subscription_id: 대상 구독 ID (미지정 시 기본값 사용).
-
-        Returns:
-            비용 데이터 딕셔너리.
-        """
-        sub_id = subscription_id or self._default_subscription_id
-        try:
-            end_date = datetime.now(UTC).replace(tzinfo=None)
-            start_date = end_date - timedelta(days=days)
-            scope = f"/subscriptions/{sub_id}"
-
-            query = _build_cost_query(start_date, end_date)
-            result = self._get_cost_client().query.usage(
-                scope=scope, parameters=query
-            )
-            total_cost, currency = _sum_cost_rows(result)
-
-            return {
-                "subscription_id": sub_id,
-                "total_cost": total_cost,
-                "currency": currency,
-                "period_days": days,
-            }
-        except Exception as e:
-            logger.error("Failed to query subscription cost: %s", e)
-            return {
-                "subscription_id": sub_id,
-                "total_cost": 0.0,
-                "currency": _DEFAULT_CURRENCY,
-                "period_days": days,
-                "error": str(e),
-            }
-
-
 @lru_cache(maxsize=1)
 def get_cost_service() -> CostService:
     """CostService 싱글턴 인스턴스를 반환한다."""

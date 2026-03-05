@@ -1,8 +1,7 @@
 """
 Configuration settings for Azure Workshop Portal
 """
-import os
-from typing import List, Dict, Optional
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -10,46 +9,54 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables"""
 
     # MSAL / JWT 검증용 (Microsoft 테넌트)
-    azure_tenant_id: str = os.getenv("AZURE_TENANT_ID", "")
-    azure_client_id: str = os.getenv("AZURE_CLIENT_ID", "")
-    azure_redirect_uri: str = os.getenv("AZURE_REDIRECT_URI", "http://localhost:5173")
+    azure_tenant_id: str = ""
+    azure_client_id: str = ""
+    azure_redirect_uri: str = "http://localhost:5173"
 
     # Service Principal (Azure 리소스 운영 테넌트)
-    azure_sp_tenant_id: str = os.getenv("AZURE_SP_TENANT_ID", "")
-    azure_sp_client_id: str = os.getenv("AZURE_SP_CLIENT_ID", "")
-    azure_sp_client_secret: str = os.getenv("AZURE_SP_CLIENT_SECRET", "")
-    azure_sp_domain: str = os.getenv("AZURE_SP_DOMAIN", "yourdomain.com")
-    azure_subscription_id: str = os.getenv("AZURE_SUBSCRIPTION_ID", "")
+    azure_sp_tenant_id: str = ""
+    azure_sp_client_id: str = ""
+    azure_sp_client_secret: str = ""
+    azure_sp_domain: str = "yourdomain.com"
+    azure_subscription_id: str = ""
 
     # 구독 캐싱/필터링
-    subscription_cache_ttl_seconds: int = int(
-        os.getenv("SUBSCRIPTION_CACHE_TTL_SECONDS", "60")
-    )
+    subscription_cache_ttl_seconds: int = 60
 
     # Multi-subscription support: comma-separated list of allowed subscription IDs
-    allowed_subscription_ids_raw: str = os.getenv("ALLOWED_SUBSCRIPTION_IDS", "")
+    allowed_subscription_ids_raw: str = ""
 
     # CORS: comma-separated production origins (local origins added automatically)
-    allowed_origins: str = os.getenv("ALLOWED_ORIGINS", "")
+    allowed_origins: str = ""
 
-    session_secret_key: str = os.getenv("SESSION_SECRET_KEY", "change-this-secret-key-in-production")
+    session_secret_key: str = "change-this-secret-key-in-production"
 
-    table_storage_account: str = os.getenv("TABLE_STORAGE_ACCOUNT", "workshopstorage")
+    table_storage_account: str = "workshopstorage"
 
-    use_azure_cli_credential: bool = os.getenv("USE_AZURE_CLI_CREDENTIAL", "false").lower() == "true"
+    use_azure_cli_credential: bool = False
+
+    @field_validator("use_azure_cli_credential", mode="before")
+    @classmethod
+    def parse_use_azure_cli_credential(cls, value):
+        """기존 동작과 동일하게 문자열 'true'만 True로 간주한다."""
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return False
+        return str(value).lower() == "true"
 
     # Email settings (Azure Communication Services or SMTP)
-    email_sender: Optional[str] = os.getenv("EMAIL_SENDER", None)
-    acs_connection_string: Optional[str] = os.getenv("ACS_CONNECTION_STRING", None)
-    smtp_host: Optional[str] = os.getenv("SMTP_HOST", None)
-    smtp_port: int = int(os.getenv("SMTP_PORT", "587"))
-    smtp_username: Optional[str] = os.getenv("SMTP_USERNAME", None)
-    smtp_password: Optional[str] = os.getenv("SMTP_PASSWORD", None)
+    email_sender: str | None = None
+    acs_connection_string: str | None = None
+    smtp_host: str | None = None
+    smtp_port: int = 587
+    smtp_username: str | None = None
+    smtp_password: str | None = None
 
     app_name: str = "Azure Workshop Management Portal"
     app_version: str = "1.0.0"
 
-    default_services: List[str] = [
+    default_services: list[str] = [
         "Microsoft.Compute",
         "Microsoft.Network",
         "Microsoft.Storage",
@@ -58,7 +65,7 @@ class Settings(BaseSettings):
         "Microsoft.Sql"
     ]
 
-    service_resource_types: Dict[str, List[str]] = {
+    service_resource_types: dict[str, list[str]] = {
         "Microsoft.Compute": [
             "Microsoft.Compute/virtualMachines",
             "Microsoft.Compute/virtualMachines/extensions",
@@ -128,6 +135,67 @@ class Settings(BaseSettings):
         "Microsoft.DocumentDB": [
             "Microsoft.DocumentDB/databaseAccounts",
         ],
+    }
+
+    # VM SKU 차단 리소스 충돌 감지용 상수
+    VM_RESOURCE_TYPE: str = "Microsoft.Compute/virtualMachines"
+
+    # VM SKU 프리셋: 프리셋 이름 → 허용 SKU 목록
+    VM_SKU_PRESETS: dict[str, dict] = {
+        "basic-lab": {
+            "label": "Basic Lab",
+            "description": "소형 VM만 허용 (GPU 차단)",
+            "skus": [
+                "Standard_B1s",
+                "Standard_B1ms",
+                "Standard_B2s",
+                "Standard_B2ms",
+                "Standard_B4ms",
+                "Standard_D2s_v3",
+                "Standard_D2s_v5",
+                "Standard_D4s_v3",
+                "Standard_D4s_v5",
+                "Standard_D2as_v4",
+                "Standard_D2as_v5",
+                "Standard_D4as_v4",
+                "Standard_D4as_v5",
+                "Standard_DS1_v2",
+                "Standard_DS2_v2",
+            ],
+        },
+        "ai-ml": {
+            "label": "AI/ML Workshop",
+            "description": "GPU VM 포함 (대형 인스턴스 제한)",
+            "skus": [
+                # Basic Lab SKUs
+                "Standard_B1s",
+                "Standard_B1ms",
+                "Standard_B2s",
+                "Standard_B2ms",
+                "Standard_B4ms",
+                "Standard_D2s_v3",
+                "Standard_D2s_v5",
+                "Standard_D4s_v3",
+                "Standard_D4s_v5",
+                "Standard_D2as_v4",
+                "Standard_D2as_v5",
+                "Standard_D4as_v4",
+                "Standard_D4as_v5",
+                "Standard_DS1_v2",
+                "Standard_DS2_v2",
+                # GPU SKUs
+                "Standard_NC4as_T4_v3",
+                "Standard_NC8as_T4_v3",
+                "Standard_NC16as_T4_v3",
+                "Standard_NC6s_v3",
+                "Standard_NC12s_v3",
+                "Standard_NC24s_v3",
+                "Standard_ND40rs_v2",
+                "Standard_NV6ads_A10_v5",
+                "Standard_NV12ads_A10_v5",
+                "Standard_NV18ads_A10_v5",
+            ],
+        },
     }
 
     password_length: int = 16

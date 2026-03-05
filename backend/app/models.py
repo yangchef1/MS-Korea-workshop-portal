@@ -43,7 +43,6 @@ class ParticipantResponse(BaseModel):
     """자격 증명이 포함된 참가자 응답."""
 
     alias: str
-    email: str
     upn: str
     password: str
     subscription_id: str
@@ -56,6 +55,7 @@ class PolicySettings(BaseModel):
 
     allowed_regions: list[str] = Field(..., min_length=1)
     denied_services: list[str] = Field(default_factory=list)
+    allowed_vm_skus: list[str] = Field(default_factory=list)
 
 
 class WorkshopCreate(BaseModel):
@@ -98,7 +98,6 @@ class ParticipantData(BaseModel):
     """워크샵 메타데이터에 저장되는 참가자 데이터."""
 
     alias: str
-    email: str
     upn: str
     password: str
     subscription_id: str = ""  # Default empty for backward compatibility; service layer falls back to default sub
@@ -125,6 +124,8 @@ class PolicyData(BaseModel):
 
     allowed_regions: list[str] = Field(..., min_length=1)
     denied_services: list[str] = Field(default_factory=list)
+    allowed_vm_skus: list[str] = Field(default_factory=list)
+    vm_sku_preset: Optional[str] = None
 
 
 WORKSHOP_VALID_STATUSES = {"active", "completed", "deleted", "failed"}
@@ -142,6 +143,7 @@ class WorkshopCreateInput(BaseModel):
     end_date: str = Field(..., min_length=1)
     allowed_regions: list[str] = Field(..., min_length=1)
     denied_services: list[str] = Field(default_factory=list)
+    allowed_vm_skus: list[str] = Field(default_factory=list)
 
 
 class WorkshopMetadata(BaseModel):
@@ -163,6 +165,7 @@ class WorkshopMetadata(BaseModel):
     status: str = "active"
     created_at: str = Field(..., min_length=1)
     created_by: Optional[str] = None
+    description: Optional[str] = None
     survey_url: Optional[str] = None
 
     @field_validator("status")
@@ -189,6 +192,9 @@ class WorkshopResponse(BaseModel):
     created_at: str
     estimated_cost: Optional[float] = 0.0
     currency: str = "USD"
+    created_by: Optional[str] = None
+    description: Optional[str] = None
+    allowed_regions: list[str] = Field(default_factory=list)
 
 
 class WorkshopDetail(BaseModel):

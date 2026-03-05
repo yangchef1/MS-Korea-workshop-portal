@@ -76,7 +76,7 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/api", tags=["Auth"])
 app.include_router(workshops.router, prefix="/api", tags=["Workshops"])
 app.include_router(templates.router, prefix="/api", tags=["Templates"])
-app.include_router(admin_subscriptions.router, prefix="/api", tags=["Admin"])
+app.include_router(admin_subscriptions.router, prefix="/api", tags=["Subscriptions"])
 
 
 @app.exception_handler(AppError)
