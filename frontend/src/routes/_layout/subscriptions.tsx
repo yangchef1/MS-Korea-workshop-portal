@@ -154,7 +154,7 @@ function SubscriptionPage() {
   const forceReleaseMutation = useMutation({
     mutationFn: (workshopId: string) => subscriptionApi.forceRelease(workshopId),
     onSuccess: (result, workshopId) => {
-      showSuccessToast(result.detail ?? `워크샵 ${workshopId} 구독이 해제되었습니다`)
+      showSuccessToast(result.message ?? `워크샵 ${workshopId} 구독이 해제되었습니다`)
       setDialogWorkshopId(null)
       queryClient.invalidateQueries({ queryKey: ["subscriptions"] })
     },
