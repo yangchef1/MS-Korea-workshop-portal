@@ -54,6 +54,10 @@ class PolicyService:
         "/providers/Microsoft.Authorization/policyDefinitions/"
         "6c112d4e-5bc7-47ae-a041-ea2d9dccd749"
     )
+    ALLOWED_VM_SKUS_POLICY_ID = (
+        "/providers/Microsoft.Authorization/policyDefinitions/"
+        "cccc23c7-8427-4f53-ad12-b6a63eb452b3"
+    )
 
     def __init__(self) -> None:
         """Azure Identity를 사용하여 PolicyService를 초기화한다.
@@ -229,6 +233,56 @@ class PolicyService:
             "Assigned denied resource types policy to %s with %d types", scope, type_count
         )
         result["denied_resource_types"] = denied_resource_types
+        return result
+
+    async def assign_allowed_vm_skus_policy(
+        self,
+        scope: str,
+        allowed_vm_skus: list[str],
+        assignment_name: str | None = None,
+        subscription_id: str | None = None,
+    ) -> dict[str, Any]:
+        """허용 VM SKU 정책을 특정 범위에 할당한다.
+
+        화이트리스트 방식으로, 지정된 VM SKU만 배포를 허용한다.
+
+        Args:
+            scope: 리소스 범위 (예: /subscriptions/{sub-id}).
+            allowed_vm_skus: 허용할 VM SKU 목록 (예: ['Standard_D2s_v3']).
+            assignment_name: 정책 할당 이름. 미지정 시 자동 생성.
+            subscription_id: 대상 구독 ID. 미지정 시 기본 구독 사용.
+
+        Returns:
+            정책 할당 결과 (id, name, scope, allowed_vm_skus).
+
+        Raises:
+            PolicyAssignmentError: SKU 목록이 비어있거나 할당 실패 시.
+            AzureAuthenticationError: 인증 실패 시.
+        """
+        if not allowed_vm_skus:
+            raise PolicyAssignmentError("At least one VM SKU must be specified")
+
+        if not assignment_name:
+            assignment_name = f"allowed-vm-skus-{uuid.uuid4().hex[:8]}"
+
+        sku_preview = ", ".join(allowed_vm_skus[:3])
+        ellipsis_suffix = "..." if len(allowed_vm_skus) > 3 else ""
+        sku_count = len(allowed_vm_skus)
+
+        assignment = PolicyAssignment(
+            display_name=f"Allowed VM SKUs: {sku_preview}{ellipsis_suffix}",
+            policy_definition_id=self.ALLOWED_VM_SKUS_POLICY_ID,
+            parameters={"listOfAllowedSKUs": {"value": allowed_vm_skus}},
+            description=f"Restricts VM deployment to {sku_count} allowed SKU(s)",
+        )
+
+        result = await self._create_assignment(
+            scope, assignment_name, assignment, "allowed VM SKUs", subscription_id
+        )
+        logger.info(
+            "Assigned allowed VM SKUs policy to %s with %d SKU(s)", scope, sku_count
+        )
+        result["allowed_vm_skus"] = allowed_vm_skus
         return result
 
     async def assign_workshop_policies(
