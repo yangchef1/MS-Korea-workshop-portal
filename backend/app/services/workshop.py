@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from typing import Any, Optional
 
 from app.config import settings
-from app.exceptions import InvalidInputError, NotFoundError
+from app.exceptions import AppError, InvalidInputError, NotFoundError
 from app.models import DeletionFailureItem, MessageResponse, WorkshopCreateInput, WorkshopDetail, WorkshopResponse
 from app.services.cost import cost_service
 from app.services.entra_id import entra_id_service
@@ -149,7 +149,11 @@ class WorkshopService:
         created_rg_specs: list[dict],
         assigned_subscription_ids: list[str],
     ) -> None:
-        """워크샵 생성 실패 시 이미 생성된 Azure 리소스를 정리한다."""
+        """워크샵 생성 실패 시 이미 생성된 Azure 리소스를 정리한다.
+
+        정리 순서: 정책 할당 → 리소스 그룹(ARM 배포 포함) → Entra ID 유저(RBAC 포함) → 구독.
+        각 단계의 실패는 로그만 남기고 다음 단계를 계속 진행한다.
+        """
         if not created_users and not created_rg_specs and not assigned_subscription_ids:
             return
 
@@ -159,6 +163,28 @@ class WorkshopService:
             len(created_rg_specs),
             len(assigned_subscription_ids),
         )
+
+        # Roll back policy assignments on subscription scope
+        for subscription_id in assigned_subscription_ids:
+            sub_scope = f"/subscriptions/{subscription_id}"
+            for assignment_name in (
+                WORKSHOP_ALLOWED_LOCATIONS_ASSIGNMENT,
+                WORKSHOP_DENIED_RESOURCES_ASSIGNMENT,
+                WORKSHOP_ALLOWED_VM_SKUS_ASSIGNMENT,
+            ):
+                try:
+                    await self.policy.delete_policy_assignment(
+                        scope=sub_scope,
+                        assignment_name=assignment_name,
+                        subscription_id=subscription_id,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Rollback: failed to remove policy %s on %s: %s",
+                        assignment_name,
+                        subscription_id,
+                        e,
+                    )
 
         if created_rg_specs:
             try:
@@ -391,11 +417,31 @@ class WorkshopService:
                 for created_user, spec in zip(user_results, rg_specs)
             ]
             participant_results = await asyncio.gather(*setup_tasks, return_exceptions=True)
-            successful_participants = [
-                participant_result
-                for participant_result in participant_results
-                if participant_result and not isinstance(participant_result, Exception)
-            ]
+
+            failed_details = []
+            successful_participants = []
+            for i, result in enumerate(participant_results):
+                alias = user_results[i]["alias"]
+                if isinstance(result, Exception):
+                    failed_details.append(f"{alias}: {result}")
+                elif not result:
+                    failed_details.append(f"{alias}: setup returned None")
+                else:
+                    successful_participants.append(result)
+
+            if failed_details:
+                logger.error(
+                    "%d of %d participant(s) failed to setup: %s",
+                    len(failed_details),
+                    len(participant_results),
+                    "; ".join(failed_details[:10]),
+                )
+                raise AppError(
+                    f"Workshop creation failed: {len(failed_details)} of "
+                    f"{len(participant_results)} participant(s) failed to setup. "
+                    f"Details: {'; '.join(failed_details[:5])}",
+                    code="PARTICIPANT_SETUP_FAILED",
+                )
 
             metadata = {
                 "id": workshop_id,
