@@ -52,6 +52,7 @@ function CreateWorkshop() {
   })
 
   const [selectedRegions, setSelectedRegions] = useState<string[]>(["koreacentral"])
+  const [deploymentRegion, setDeploymentRegion] = useState<string>("koreacentral")
   const [selectedServices, setSelectedServices] = useState<string[]>([])
   const [selectedPreset, setSelectedPreset] = useState<string>("")
   const [selectedVmSkus, setSelectedVmSkus] = useState<string[]>([])
@@ -107,6 +108,15 @@ function CreateWorkshop() {
     () => selectedServices.includes("Microsoft.Compute/virtualMachines"),
     [selectedServices]
   )
+
+  // 허용 리전 변경 시 배포 리전 동기화: 현재 선택이 유효하지 않으면 첫 번째 리전으로 변경
+  useEffect(() => {
+    if (selectedRegions.length === 0) {
+      setDeploymentRegion("")
+    } else if (!selectedRegions.includes(deploymentRegion)) {
+      setDeploymentRegion(selectedRegions[0])
+    }
+  }, [selectedRegions, deploymentRegion])
 
   // VM 리소스 차단 시 SKU 선택 초기화
   useEffect(() => {
@@ -194,6 +204,7 @@ function CreateWorkshop() {
       denied_services: selectedServices.join(","),
       allowed_vm_skus: selectedVmSkus.length > 0 ? selectedVmSkus.join(",") : undefined,
       vm_sku_preset: selectedPreset || undefined,
+      deployment_region: deploymentRegion || undefined,
       participants_file: csvFile,
       survey_url: formData.survey_url || undefined,
       description: formData.description || undefined,
@@ -345,6 +356,32 @@ function CreateWorkshop() {
               </div>
               <p className="text-xs text-muted-foreground">
                 참가자가 리소스를 생성할 수 있는 리전을 선택하세요. 최소 1개 필수.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="deployment_region">배포 리전 *</Label>
+              <select
+                id="deployment_region"
+                value={deploymentRegion}
+                onChange={(e) => setDeploymentRegion(e.target.value)}
+                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              >
+                {selectedRegions.length === 0 ? (
+                  <option value="">허용 리전을 먼저 선택하세요</option>
+                ) : (
+                  selectedRegions.map((value) => {
+                    const label = regions.find((r) => r.value === value)?.label || value
+                    return (
+                      <option key={value} value={value}>
+                        {label}
+                      </option>
+                    )
+                  })
+                )}
+              </select>
+              <p className="text-xs text-muted-foreground">
+                리소스 그룹 및 사전 인프라 템플릿이 배포될 리전입니다.
               </p>
             </div>
 

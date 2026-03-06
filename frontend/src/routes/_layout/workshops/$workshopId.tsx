@@ -799,7 +799,7 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
   const statusColors: Record<string, string> = {
     active: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300",
     completed: "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300",
-    draft: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-300",
+    creating: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300",
     failed: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300",
     deleted: "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300",
   }
@@ -870,11 +870,16 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
             <div className="flex flex-col gap-2">
               <div className="flex items-center gap-2 text-muted-foreground">
                 <MapPin className="h-4 w-4" />
-                <span className="text-sm">리전</span>
+                <span className="text-sm">허용 리전</span>
               </div>
               <p className="text-xl font-semibold">
                 {workshop.policy?.allowed_regions?.join(", ") || "-"}
               </p>
+              {workshop.deployment_region && (
+                <p className="text-xs text-muted-foreground">
+                  배포 리전: {workshop.deployment_region}
+                </p>
+              )}
             </div>
           </CardContent>
         </Card>

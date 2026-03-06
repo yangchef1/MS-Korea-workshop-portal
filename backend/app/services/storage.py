@@ -504,6 +504,81 @@ class StorageService:
                     "Failed to release subscriptions due to concurrent modification"
                 ) from e
 
+    async def release_subscriptions_by_workshop(
+        self, workshop_id: str,
+    ) -> list[str]:
+        """워크샵 ID로 in_use_map에서 해당 워크샵의 모든 구독을 해제한다.
+
+        참가자 목록 없이도 고아 구독(워크샵 생성 실패 후 남은 alloc 등)을
+        정리할 수 있다. ETag optimistic concurrency로 동시 수정에 안전하다.
+
+        Args:
+            workshop_id: 해제할 워크샵 ID.
+
+        Returns:
+            해제된 구독 ID 목록. 해제할 항목이 없으면 빈 리스트.
+
+        Raises:
+            ConflictError: ETag 충돌 재시도 한도 초과 시.
+        """
+        if not workshop_id:
+            return []
+
+        await self._ensure_tables_exist()
+        table_client = self.table_service_client.get_table_client(PORTAL_SETTINGS_TABLE)
+
+        for attempt in range(_ACQUIRE_MAX_RETRIES):
+            try:
+                try:
+                    entity = await table_client.get_entity(
+                        partition_key=PORTAL_SETTINGS_PARTITION_KEY,
+                        row_key=PORTAL_SETTINGS_ROW_KEY_SUBSCRIPTIONS,
+                    )
+                    etag = entity.metadata["etag"]
+                except ResourceNotFoundError:
+                    return []
+
+                in_use_map: dict[str, str] = json.loads(
+                    entity.get("in_use_map_json", "{}")
+                )
+
+                to_release = [
+                    sid for sid, wid in in_use_map.items() if wid == workshop_id
+                ]
+                if not to_release:
+                    return []
+
+                for sid in to_release:
+                    del in_use_map[sid]
+
+                entity["in_use_map_json"] = json.dumps(in_use_map)
+                await table_client.update_entity(
+                    entity,
+                    mode="replace",
+                    etag=etag,
+                    match_condition=MatchConditions.IfNotModified,
+                )
+                logger.info(
+                    "Released %d subscription(s) for workshop %s: %s",
+                    len(to_release), workshop_id, to_release,
+                )
+                return to_release
+
+            except HttpResponseError as e:
+                if e.status_code == 412 and attempt < _ACQUIRE_MAX_RETRIES - 1:
+                    logger.warning(
+                        "ETag conflict on release_subscriptions_by_workshop "
+                        "(attempt %d/%d), retrying",
+                        attempt + 1, _ACQUIRE_MAX_RETRIES,
+                    )
+                    continue
+                raise ConflictError(
+                    f"Failed to release subscriptions for workshop '{workshop_id}' "
+                    "due to concurrent modification"
+                ) from e
+
+        return []
+
     # ------------------------------------------------------------------
     # VM SKU cache
     # ------------------------------------------------------------------

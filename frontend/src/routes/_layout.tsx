@@ -1,4 +1,5 @@
 import { createFileRoute, Outlet, redirect } from "@tanstack/react-router"
+import { Loader2 } from "lucide-react"
 
 import { Footer } from "@/components/Common/Footer"
 import AppSidebar from "@/components/Sidebar/AppSidebar"
@@ -11,6 +12,11 @@ import { queryClient, queryKeys } from "@/lib/queryClient"
 
 export const Route = createFileRoute("/_layout")({
   component: Layout,
+  pendingComponent: () => (
+    <div className="flex min-h-screen items-center justify-center">
+      <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+    </div>
+  ),
   beforeLoad: async () => {
     try {
       await queryClient.fetchQuery({

@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from typing import Any, Optional
 
 from app.config import settings
-from app.exceptions import InvalidInputError, NotFoundError
+from app.exceptions import AppError, InvalidInputError, NotFoundError
 from app.models import DeletionFailureItem, MessageResponse, WorkshopCreateInput, WorkshopDetail, WorkshopResponse
 from app.services.cost import cost_service
 from app.services.entra_id import entra_id_service
@@ -26,6 +26,7 @@ WORKSHOP_DENIED_RESOURCES_ASSIGNMENT = "workshop-denied-resources"
 WORKSHOP_ALLOWED_VM_SKUS_ASSIGNMENT = "workshop-allowed-vm-skus"
 
 WORKSHOP_STATUS_ACTIVE = "active"
+WORKSHOP_STATUS_CREATING = "creating"
 WORKSHOP_STATUS_FAILED = "failed"
 DEFAULT_CURRENCY = "USD"
 NO_TEMPLATE = "none"
@@ -99,6 +100,7 @@ class WorkshopService:
                 created_by=workshop.get("created_by"),
                 description=workshop.get("description"),
                 allowed_regions=policy_data.get("allowed_regions", []),
+                deployment_region=workshop.get("deployment_region", ""),
             )
 
         return await asyncio.gather(*[_enrich_workshop(workshop) for workshop in workshops])
@@ -132,6 +134,7 @@ class WorkshopService:
             end_date=metadata["end_date"],
             participants=metadata.get("participants", []),
             base_resources_template=metadata.get("base_resources_template", ""),
+            deployment_region=metadata.get("deployment_region", ""),
             policy=metadata.get("policy", {}),
             status=metadata.get("status", WORKSHOP_STATUS_ACTIVE),
             created_at=metadata.get("created_at", ""),
@@ -148,8 +151,14 @@ class WorkshopService:
         created_users: list[dict],
         created_rg_specs: list[dict],
         assigned_subscription_ids: list[str],
+        workshop_id: str = "",
     ) -> None:
-        """워크샵 생성 실패 시 이미 생성된 Azure 리소스를 정리한다."""
+        """워크샵 생성 실패 시 이미 생성된 Azure 리소스를 정리한다.
+
+        정리 순서: 정책 할당 → 리소스 그룹(ARM 배포 포함) → Entra ID 유저(RBAC 포함) → 구독.
+        각 단계의 실패는 로그만 남기고 다음 단계를 계속 진행한다.
+        구독 해제는 workshop_id로 in_use_map을 역조회하여 고아 alloc도 함께 정리한다.
+        """
         if not created_users and not created_rg_specs and not assigned_subscription_ids:
             return
 
@@ -159,6 +168,28 @@ class WorkshopService:
             len(created_rg_specs),
             len(assigned_subscription_ids),
         )
+
+        # Roll back policy assignments on subscription scope
+        for subscription_id in assigned_subscription_ids:
+            sub_scope = f"/subscriptions/{subscription_id}"
+            for assignment_name in (
+                WORKSHOP_ALLOWED_LOCATIONS_ASSIGNMENT,
+                WORKSHOP_DENIED_RESOURCES_ASSIGNMENT,
+                WORKSHOP_ALLOWED_VM_SKUS_ASSIGNMENT,
+            ):
+                try:
+                    await self.policy.delete_policy_assignment(
+                        scope=sub_scope,
+                        assignment_name=assignment_name,
+                        subscription_id=subscription_id,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Rollback: failed to remove policy %s on %s: %s",
+                        assignment_name,
+                        subscription_id,
+                        e,
+                    )
 
         if created_rg_specs:
             try:
@@ -176,12 +207,38 @@ class WorkshopService:
                 except Exception as e:
                     logger.error("Rollback: failed to delete users: %s", e)
 
-        if assigned_subscription_ids:
+        if assigned_subscription_ids or workshop_id:
             try:
-                await self.storage.release_subscriptions(assigned_subscription_ids)
-                logger.info("Rollback: released %d subscriptions", len(assigned_subscription_ids))
+                if workshop_id:
+                    # workshop_id 역조회로 해제 — 참가자 목록 불일치·고아 alloc도 처리
+                    released = await self.storage.release_subscriptions_by_workshop(workshop_id)
+                    logger.info(
+                        "Rollback: released %d subscription(s) for workshop %s",
+                        len(released), workshop_id,
+                    )
+                else:
+                    await self.storage.release_subscriptions(assigned_subscription_ids)
+                    logger.info(
+                        "Rollback: released %d subscription(s)", len(assigned_subscription_ids),
+                    )
             except Exception as e:
-                logger.error("Rollback: failed to release subscriptions: %s", e)
+                logger.critical(
+                    "Rollback: FAILED to release subscription(s) for workshop %s — "
+                    "in_use_map may contain orphaned entries. "
+                    "Run admin force-release to recover. Error: %s",
+                    workshop_id, e,
+                )
+
+        # Delete 'creating' metadata record so it doesn't linger in the workshop list
+        if workshop_id:
+            try:
+                await self.storage.delete_workshop_metadata(workshop_id)
+                logger.info("Rollback: deleted creating metadata for workshop %s", workshop_id)
+            except Exception as e:
+                logger.error(
+                    "Rollback: failed to delete creating metadata for workshop %s: %s",
+                    workshop_id, e,
+                )
 
     async def _setup_participant(
         self,
@@ -281,6 +338,7 @@ class WorkshopService:
         denied_services: str,
         allowed_vm_skus: str,
         vm_sku_preset: str,
+        deployment_region: str,
         participants_file,
         description: str,
         survey_url: Optional[str],
@@ -299,6 +357,15 @@ class WorkshopService:
             vm_skus = []
 
         await self._validate_vm_skus_for_regions(vm_skus, regions)
+
+        resolved_deployment_region = deployment_region.strip() if deployment_region else ""
+        if not resolved_deployment_region:
+            resolved_deployment_region = regions[0]
+        if resolved_deployment_region not in regions:
+            raise InvalidInputError(
+                f"Deployment region '{resolved_deployment_region}' is not in "
+                f"allowed regions: {regions}"
+            )
 
         try:
             WorkshopCreateInput(
@@ -333,6 +400,29 @@ class WorkshopService:
 
             await self.storage.acquire_subscriptions(assigned_subscription_ids, workshop_id)
 
+            # Save minimal metadata with 'creating' status before resource provisioning
+            creating_metadata = {
+                "id": workshop_id,
+                "name": name,
+                "start_date": start_date,
+                "end_date": end_date,
+                "participants": [],
+                "base_resources_template": base_resources_template,
+                "deployment_region": resolved_deployment_region,
+                "policy": {
+                    "allowed_regions": regions,
+                    "denied_services": services,
+                    "allowed_vm_skus": vm_skus,
+                    "vm_sku_preset": vm_sku_preset or None,
+                },
+                "status": WORKSHOP_STATUS_CREATING,
+                "created_at": datetime.now(UTC).isoformat(),
+                "created_by": user.get("name", "") if user else "",
+                "description": description or "",
+                "survey_url": survey_url or "",
+            }
+            await self.storage.save_workshop_metadata(workshop_id, creating_metadata)
+
             logger.info(
                 "Creating workshop '%s' with %d participants",
                 name,
@@ -359,7 +449,7 @@ class WorkshopService:
                         f"{settings.resource_group_prefix}"
                         f"-{workshop_id[:8]}-{created_user['alias']}"
                     ),
-                    "location": regions[0],
+                    "location": resolved_deployment_region,
                     "subscription_id": created_user["subscription_id"],
                     "tags": {
                         "workshop_id": workshop_id,
@@ -391,11 +481,31 @@ class WorkshopService:
                 for created_user, spec in zip(user_results, rg_specs)
             ]
             participant_results = await asyncio.gather(*setup_tasks, return_exceptions=True)
-            successful_participants = [
-                participant_result
-                for participant_result in participant_results
-                if participant_result and not isinstance(participant_result, Exception)
-            ]
+
+            failed_details = []
+            successful_participants = []
+            for i, result in enumerate(participant_results):
+                alias = user_results[i]["alias"]
+                if isinstance(result, Exception):
+                    failed_details.append(f"{alias}: {result}")
+                elif not result:
+                    failed_details.append(f"{alias}: setup returned None")
+                else:
+                    successful_participants.append(result)
+
+            if failed_details:
+                logger.error(
+                    "%d of %d participant(s) failed to setup: %s",
+                    len(failed_details),
+                    len(participant_results),
+                    "; ".join(failed_details[:10]),
+                )
+                raise AppError(
+                    f"Workshop creation failed: {len(failed_details)} of "
+                    f"{len(participant_results)} participant(s) failed to setup. "
+                    f"Details: {'; '.join(failed_details[:5])}",
+                    code="PARTICIPANT_SETUP_FAILED",
+                )
 
             metadata = {
                 "id": workshop_id,
@@ -404,6 +514,7 @@ class WorkshopService:
                 "end_date": end_date,
                 "participants": successful_participants,
                 "base_resources_template": base_resources_template,
+                "deployment_region": resolved_deployment_region,
                 "policy": {
                     "allowed_regions": regions,
                     "denied_services": services,
@@ -427,6 +538,7 @@ class WorkshopService:
                 end_date=end_date,
                 participants=successful_participants,
                 base_resources_template=base_resources_template,
+                deployment_region=resolved_deployment_region,
                 policy=metadata["policy"],
                 status=WORKSHOP_STATUS_ACTIVE,
                 created_at=metadata["created_at"],
@@ -439,6 +551,7 @@ class WorkshopService:
                 created_users,
                 created_rg_specs,
                 assigned_subscription_ids,
+                workshop_id=workshop_id,
             )
             raise
 
@@ -536,9 +649,17 @@ class WorkshopService:
             await self.storage.save_workshop_metadata(workshop_id, metadata)
 
             try:
-                await self.storage.release_subscriptions(subscription_ids_to_release)
+                # workshop_id 역조회로 해제 — 참가자 목록 불일치·고아 alloc도 함께 처리
+                released = await self.storage.release_subscriptions_by_workshop(workshop_id)
+                logger.info(
+                    "Released %d subscription(s) during partial delete of workshop %s",
+                    len(released), workshop_id,
+                )
             except Exception as e:
-                logger.error("Failed to release subscriptions after partial deletion: %s", e)
+                logger.error(
+                    "Failed to release subscriptions after partial deletion of workshop %s: %s",
+                    workshop_id, e,
+                )
 
             logger.warning(
                 "Workshop %s deletion partially failed: %d failures",
@@ -555,9 +676,17 @@ class WorkshopService:
             )
 
         try:
-            await self.storage.release_subscriptions(subscription_ids_to_release)
+            # workshop_id 역조회로 해제 — 참가자 목록과 in_use_map 불일치도 커버
+            released = await self.storage.release_subscriptions_by_workshop(workshop_id)
+            logger.info(
+                "Released %d subscription(s) for workshop %s",
+                len(released), workshop_id,
+            )
         except Exception as e:
-            logger.error("Failed to release subscriptions after deletion: %s", e)
+            logger.error(
+                "Failed to release subscriptions after deletion of workshop %s: %s",
+                workshop_id, e,
+            )
 
         await self.storage.delete_workshop_metadata(workshop_id)
 

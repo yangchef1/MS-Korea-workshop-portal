@@ -237,6 +237,7 @@ class PolicyService:
         allowed_locations: list[str],
         denied_resource_types: list[str],
         subscription_id: str | None = None,
+        allowed_vm_skus: list[str] | None = None,
     ) -> dict[str, Any]:
         """워크샵 정책(지역 허용 + 리소스 타입 차단)을 한 번에 할당한다.
 
@@ -248,6 +249,7 @@ class PolicyService:
             allowed_locations: 허용 Azure 리전 목록.
             denied_resource_types: 차단할 리소스 타입 목록.
             subscription_id: 대상 구독 ID. 미지정 시 기본 구독 사용.
+            allowed_vm_skus: 허용할 VM SKU 목록. 미지정 시 VM SKU 정책을 할당하지 않음.
 
         Returns:
             location_policy와 resource_types_policy 결과 딕셔너리.

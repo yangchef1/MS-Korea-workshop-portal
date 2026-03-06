@@ -250,6 +250,11 @@ export interface SubscriptionSettingsResponse {
   from_cache?: boolean
 }
 
+/** Generic message-only response from the API. */
+export interface MessageResponse {
+  message: string
+}
+
 export interface Participant {
   alias?: string
   name?: string
@@ -263,8 +268,9 @@ export interface Workshop {
   id: string
   name: string
   description?: string
-  status: "active" | "completed" | "draft" | "failed" | "deleted"
+  status: "active" | "completed" | "creating" | "failed" | "deleted"
   region?: string
+  deployment_region?: string
   policy?: {
     allowed_regions: string[]
     denied_services: string[]
@@ -402,6 +408,7 @@ export interface CreateWorkshopRequest {
   denied_services: string  // comma-separated
   allowed_vm_skus?: string  // comma-separated
   vm_sku_preset?: string
+  deployment_region?: string
   participants_file: File
   survey_url?: string
   description?: string
@@ -453,6 +460,9 @@ export const workshopApi = {
     }
     if (data.vm_sku_preset) {
       formData.append("vm_sku_preset", data.vm_sku_preset)
+    }
+    if (data.deployment_region) {
+      formData.append("deployment_region", data.deployment_region)
     }
 
     const response = await apiClient.post<Workshop>("/workshops", formData, {
@@ -582,6 +592,14 @@ export const subscriptionApi = {
     const response = await apiClient.get<SubscriptionSettingsResponse>(
       "/subscriptions",
       { params: { refresh } }
+    )
+    return response.data
+  },
+
+  /** 워크샵에 묶인 모든 구독을 강제 해제한다 (Admin 전용). */
+  forceRelease: async (workshopId: string): Promise<MessageResponse> => {
+    const response = await apiClient.post<MessageResponse>(
+      `/subscriptions/force-release/${workshopId}`
     )
     return response.data
   },

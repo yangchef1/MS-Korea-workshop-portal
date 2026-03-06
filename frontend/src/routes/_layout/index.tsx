@@ -12,6 +12,7 @@ import {
   CheckCircle2,
   Shield,
   User,
+  Loader2,
 } from "lucide-react"
 
 import { workshopApi, subscriptionApi, type Workshop } from "@/client"
@@ -40,7 +41,7 @@ function WorkshopCard({ workshop }: { workshop: Workshop }) {
   const statusColors: Record<string, string> = {
     active: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300",
     completed: "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300",
-    draft: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-300",
+    creating: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300",
     failed: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300",
     deleted: "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300",
   }
@@ -53,44 +54,65 @@ function WorkshopCard({ workshop }: { workshop: Workshop }) {
       minute: "2-digit",
     })
 
+  const isCreating = workshop.status === "creating"
+
+  const card = (
+    <Card
+      className={`h-full flex flex-col transition-shadow ${
+        isCreating
+          ? "opacity-60 cursor-not-allowed"
+          : "hover:shadow-md cursor-pointer"
+      }`}
+    >
+      <CardHeader className="flex-none pb-2">
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle className="text-lg truncate">{workshop.name}</CardTitle>
+          <span
+            className={`px-2 py-1 rounded-full text-xs font-medium whitespace-nowrap shrink-0 ${statusColors[workshop.status] || statusColors.creating}`}
+          >
+            {workshop.status === "failed" && (
+              <AlertCircle className="inline h-3 w-3 mr-1" />
+            )}
+            {isCreating && (
+              <Loader2 className="inline h-3 w-3 mr-1 animate-spin" />
+            )}
+            {workshop.status}
+          </span>
+        </div>
+        {workshop.description && (
+          <CardDescription className="line-clamp-2">
+            {workshop.description}
+          </CardDescription>
+        )}
+      </CardHeader>
+      <CardContent className="mt-auto flex-none">
+        <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
+          {workshop.created_by && (
+            <div className="flex items-center gap-1">
+              <User className="h-4 w-4 shrink-0" />
+              <span className="truncate">{workshop.created_by}</span>
+            </div>
+          )}
+          <div className="flex items-center gap-1">
+            <Users className="h-4 w-4 shrink-0" />
+            {workshop.participant_count ?? workshop.participants?.length ?? 0} 참가자
+          </div>
+          <div className="flex items-center gap-1">
+            <Calendar className="h-4 w-4 shrink-0" />
+            {formatDate(workshop.start_date)} ~ {formatDate(workshop.end_date)}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  )
+
+  if (isCreating) {
+    return <div>{card}</div>
+  }
+
   return (
     <Link to="/workshops/$workshopId" params={{ workshopId: workshop.id }}>
-      <Card className="hover:shadow-md transition-shadow cursor-pointer">
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-lg">{workshop.name}</CardTitle>
-            <span
-              className={`px-2 py-1 rounded-full text-xs font-medium ${statusColors[workshop.status] || statusColors.draft}`}
-            >
-              {workshop.status === "failed" && (
-                <AlertCircle className="inline h-3 w-3 mr-1" />
-              )}
-              {workshop.status}
-            </span>
-          </div>
-          {workshop.description && (
-            <CardDescription>{workshop.description}</CardDescription>
-          )}
-        </CardHeader>
-        <CardContent>
-          <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
-            {workshop.created_by && (
-              <div className="flex items-center gap-1">
-                <User className="h-4 w-4" />
-                {workshop.created_by}
-              </div>
-            )}
-            <div className="flex items-center gap-1">
-              <Users className="h-4 w-4" />
-              {workshop.participant_count ?? workshop.participants?.length ?? 0} 참가자
-            </div>
-            <div className="flex items-center gap-1">
-              <Calendar className="h-4 w-4" />
-              {formatDate(workshop.start_date)} ~ {formatDate(workshop.end_date)}
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+      {card}
     </Link>
   )
 }
@@ -149,12 +171,12 @@ function WorkshopsList() {
           fallback={
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
               {[1, 2, 3].map((i) => (
-                <Card key={i} className="animate-pulse">
-                  <CardHeader>
+                <Card key={i} className="h-full flex flex-col animate-pulse">
+                  <CardHeader className="flex-none pb-2">
                     <div className="h-6 bg-muted rounded w-3/4"></div>
                     <div className="h-4 bg-muted rounded w-1/2 mt-2"></div>
                   </CardHeader>
-                  <CardContent>
+                  <CardContent className="mt-auto flex-none">
                     <div className="h-4 bg-muted rounded w-full"></div>
                   </CardContent>
                 </Card>
