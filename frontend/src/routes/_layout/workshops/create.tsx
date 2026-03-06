@@ -163,10 +163,10 @@ function CreateWorkshop() {
 
   const createMutation = useMutation({
     mutationFn: (data: CreateWorkshopRequest) => workshopApi.create(data),
-    onSuccess: (workshop) => {
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["workshops"] })
       showSuccessToast("워크샵이 성공적으로 생성되었습니다")
-      navigate({ to: "/workshops/$workshopId", params: { workshopId: workshop.id } })
+      navigate({ to: "/" })
     },
     onError: () => {
       showErrorToast("워크샵 생성에 실패했습니다")

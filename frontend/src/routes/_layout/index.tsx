@@ -26,10 +26,19 @@ import {
 } from "@/components/ui/card"
 import useAuth from "@/hooks/useAuth"
 
+/** Poll interval when any workshop is still being provisioned. */
+const CREATING_POLL_INTERVAL_MS = 5000
+
 function getWorkshopsQueryOptions() {
   return {
     queryFn: () => workshopApi.list(),
     queryKey: ["workshops"],
+    refetchInterval: (query: { state: { data?: Workshop[] } }) => {
+      const hasCreating = query.state.data?.some(
+        (w) => w.status === "creating"
+      )
+      return hasCreating ? CREATING_POLL_INTERVAL_MS : false
+    },
   }
 }
 
