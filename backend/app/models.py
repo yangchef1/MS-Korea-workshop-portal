@@ -128,7 +128,7 @@ class PolicyData(BaseModel):
     vm_sku_preset: Optional[str] = None
 
 
-WORKSHOP_VALID_STATUSES = {"active", "completed", "deleted", "failed"}
+WORKSHOP_VALID_STATUSES = {"active", "completed", "creating", "deleted", "failed"}
 
 
 class WorkshopCreateInput(BaseModel):

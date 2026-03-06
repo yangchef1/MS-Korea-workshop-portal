@@ -26,6 +26,7 @@ WORKSHOP_DENIED_RESOURCES_ASSIGNMENT = "workshop-denied-resources"
 WORKSHOP_ALLOWED_VM_SKUS_ASSIGNMENT = "workshop-allowed-vm-skus"
 
 WORKSHOP_STATUS_ACTIVE = "active"
+WORKSHOP_STATUS_CREATING = "creating"
 WORKSHOP_STATUS_FAILED = "failed"
 DEFAULT_CURRENCY = "USD"
 NO_TEMPLATE = "none"
@@ -228,6 +229,17 @@ class WorkshopService:
                     workshop_id, e,
                 )
 
+        # Delete 'creating' metadata record so it doesn't linger in the workshop list
+        if workshop_id:
+            try:
+                await self.storage.delete_workshop_metadata(workshop_id)
+                logger.info("Rollback: deleted creating metadata for workshop %s", workshop_id)
+            except Exception as e:
+                logger.error(
+                    "Rollback: failed to delete creating metadata for workshop %s: %s",
+                    workshop_id, e,
+                )
+
     async def _setup_participant(
         self,
         user: dict,
@@ -387,6 +399,29 @@ class WorkshopService:
             })
 
             await self.storage.acquire_subscriptions(assigned_subscription_ids, workshop_id)
+
+            # Save minimal metadata with 'creating' status before resource provisioning
+            creating_metadata = {
+                "id": workshop_id,
+                "name": name,
+                "start_date": start_date,
+                "end_date": end_date,
+                "participants": [],
+                "base_resources_template": base_resources_template,
+                "deployment_region": resolved_deployment_region,
+                "policy": {
+                    "allowed_regions": regions,
+                    "denied_services": services,
+                    "allowed_vm_skus": vm_skus,
+                    "vm_sku_preset": vm_sku_preset or None,
+                },
+                "status": WORKSHOP_STATUS_CREATING,
+                "created_at": datetime.now(UTC).isoformat(),
+                "created_by": user.get("name", "") if user else "",
+                "description": description or "",
+                "survey_url": survey_url or "",
+            }
+            await self.storage.save_workshop_metadata(workshop_id, creating_metadata)
 
             logger.info(
                 "Creating workshop '%s' with %d participants",

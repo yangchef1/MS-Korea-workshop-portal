@@ -250,6 +250,11 @@ export interface SubscriptionSettingsResponse {
   from_cache?: boolean
 }
 
+/** Generic message-only response from the API. */
+export interface MessageResponse {
+  message: string
+}
+
 export interface Participant {
   alias?: string
   name?: string
@@ -263,7 +268,7 @@ export interface Workshop {
   id: string
   name: string
   description?: string
-  status: "active" | "completed" | "draft" | "failed" | "deleted"
+  status: "active" | "completed" | "creating" | "failed" | "deleted"
   region?: string
   deployment_region?: string
   policy?: {
