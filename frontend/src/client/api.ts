@@ -590,6 +590,14 @@ export const subscriptionApi = {
     )
     return response.data
   },
+
+  /** 워크샵에 묶인 모든 구독을 강제 해제한다 (Admin 전용). */
+  forceRelease: async (workshopId: string): Promise<MessageResponse> => {
+    const response = await apiClient.post<MessageResponse>(
+      `/subscriptions/force-release/${workshopId}`
+    )
+    return response.data
+  },
 }
 
 // Auth API - Note: Most auth is now handled by MSAL on frontend

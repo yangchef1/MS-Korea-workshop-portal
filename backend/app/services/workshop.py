@@ -150,11 +150,13 @@ class WorkshopService:
         created_users: list[dict],
         created_rg_specs: list[dict],
         assigned_subscription_ids: list[str],
+        workshop_id: str = "",
     ) -> None:
         """워크샵 생성 실패 시 이미 생성된 Azure 리소스를 정리한다.
 
         정리 순서: 정책 할당 → 리소스 그룹(ARM 배포 포함) → Entra ID 유저(RBAC 포함) → 구독.
         각 단계의 실패는 로그만 남기고 다음 단계를 계속 진행한다.
+        구독 해제는 workshop_id로 in_use_map을 역조회하여 고아 alloc도 함께 정리한다.
         """
         if not created_users and not created_rg_specs and not assigned_subscription_ids:
             return
@@ -204,12 +206,27 @@ class WorkshopService:
                 except Exception as e:
                     logger.error("Rollback: failed to delete users: %s", e)
 
-        if assigned_subscription_ids:
+        if assigned_subscription_ids or workshop_id:
             try:
-                await self.storage.release_subscriptions(assigned_subscription_ids)
-                logger.info("Rollback: released %d subscriptions", len(assigned_subscription_ids))
+                if workshop_id:
+                    # workshop_id 역조회로 해제 — 참가자 목록 불일치·고아 alloc도 처리
+                    released = await self.storage.release_subscriptions_by_workshop(workshop_id)
+                    logger.info(
+                        "Rollback: released %d subscription(s) for workshop %s",
+                        len(released), workshop_id,
+                    )
+                else:
+                    await self.storage.release_subscriptions(assigned_subscription_ids)
+                    logger.info(
+                        "Rollback: released %d subscription(s)", len(assigned_subscription_ids),
+                    )
             except Exception as e:
-                logger.error("Rollback: failed to release subscriptions: %s", e)
+                logger.critical(
+                    "Rollback: FAILED to release subscription(s) for workshop %s — "
+                    "in_use_map may contain orphaned entries. "
+                    "Run admin force-release to recover. Error: %s",
+                    workshop_id, e,
+                )
 
     async def _setup_participant(
         self,
@@ -499,6 +516,7 @@ class WorkshopService:
                 created_users,
                 created_rg_specs,
                 assigned_subscription_ids,
+                workshop_id=workshop_id,
             )
             raise
 
@@ -596,9 +614,17 @@ class WorkshopService:
             await self.storage.save_workshop_metadata(workshop_id, metadata)
 
             try:
-                await self.storage.release_subscriptions(subscription_ids_to_release)
+                # workshop_id 역조회로 해제 — 참가자 목록 불일치·고아 alloc도 함께 처리
+                released = await self.storage.release_subscriptions_by_workshop(workshop_id)
+                logger.info(
+                    "Released %d subscription(s) during partial delete of workshop %s",
+                    len(released), workshop_id,
+                )
             except Exception as e:
-                logger.error("Failed to release subscriptions after partial deletion: %s", e)
+                logger.error(
+                    "Failed to release subscriptions after partial deletion of workshop %s: %s",
+                    workshop_id, e,
+                )
 
             logger.warning(
                 "Workshop %s deletion partially failed: %d failures",
@@ -615,9 +641,17 @@ class WorkshopService:
             )
 
         try:
-            await self.storage.release_subscriptions(subscription_ids_to_release)
+            # workshop_id 역조회로 해제 — 참가자 목록과 in_use_map 불일치도 커버
+            released = await self.storage.release_subscriptions_by_workshop(workshop_id)
+            logger.info(
+                "Released %d subscription(s) for workshop %s",
+                len(released), workshop_id,
+            )
         except Exception as e:
-            logger.error("Failed to release subscriptions after deletion: %s", e)
+            logger.error(
+                "Failed to release subscriptions after deletion of workshop %s: %s",
+                workshop_id, e,
+            )
 
         await self.storage.delete_workshop_metadata(workshop_id)
 
