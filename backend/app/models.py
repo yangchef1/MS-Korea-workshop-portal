@@ -161,6 +161,10 @@ class WorkshopMetadata(BaseModel):
     end_date: str
     participants: list[ParticipantData] = []
     base_resources_template: str
+    deployment_region: str = Field(
+        default="",
+        description="리소스 그룹 및 템플릿 배포 리전. 비어 있으면 allowed_regions[0] 사용.",
+    )
     policy: PolicyData
     status: str = "active"
     created_at: str = Field(..., min_length=1)
@@ -195,6 +199,7 @@ class WorkshopResponse(BaseModel):
     created_by: Optional[str] = None
     description: Optional[str] = None
     allowed_regions: list[str] = Field(default_factory=list)
+    deployment_region: str = ""
 
 
 class WorkshopDetail(BaseModel):
@@ -206,6 +211,7 @@ class WorkshopDetail(BaseModel):
     end_date: str
     participants: list[ParticipantData]
     base_resources_template: str
+    deployment_region: str = ""
     policy: PolicyData
     status: str
     created_at: str

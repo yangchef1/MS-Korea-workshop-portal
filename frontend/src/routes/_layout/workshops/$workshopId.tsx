@@ -870,11 +870,16 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
             <div className="flex flex-col gap-2">
               <div className="flex items-center gap-2 text-muted-foreground">
                 <MapPin className="h-4 w-4" />
-                <span className="text-sm">리전</span>
+                <span className="text-sm">허용 리전</span>
               </div>
               <p className="text-xl font-semibold">
                 {workshop.policy?.allowed_regions?.join(", ") || "-"}
               </p>
+              {workshop.deployment_region && (
+                <p className="text-xs text-muted-foreground">
+                  배포 리전: {workshop.deployment_region}
+                </p>
+              )}
             </div>
           </CardContent>
         </Card>

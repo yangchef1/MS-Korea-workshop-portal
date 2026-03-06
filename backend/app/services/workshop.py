@@ -99,6 +99,7 @@ class WorkshopService:
                 created_by=workshop.get("created_by"),
                 description=workshop.get("description"),
                 allowed_regions=policy_data.get("allowed_regions", []),
+                deployment_region=workshop.get("deployment_region", ""),
             )
 
         return await asyncio.gather(*[_enrich_workshop(workshop) for workshop in workshops])
@@ -132,6 +133,7 @@ class WorkshopService:
             end_date=metadata["end_date"],
             participants=metadata.get("participants", []),
             base_resources_template=metadata.get("base_resources_template", ""),
+            deployment_region=metadata.get("deployment_region", ""),
             policy=metadata.get("policy", {}),
             status=metadata.get("status", WORKSHOP_STATUS_ACTIVE),
             created_at=metadata.get("created_at", ""),
@@ -307,6 +309,7 @@ class WorkshopService:
         denied_services: str,
         allowed_vm_skus: str,
         vm_sku_preset: str,
+        deployment_region: str,
         participants_file,
         description: str,
         survey_url: Optional[str],
@@ -325,6 +328,15 @@ class WorkshopService:
             vm_skus = []
 
         await self._validate_vm_skus_for_regions(vm_skus, regions)
+
+        resolved_deployment_region = deployment_region.strip() if deployment_region else ""
+        if not resolved_deployment_region:
+            resolved_deployment_region = regions[0]
+        if resolved_deployment_region not in regions:
+            raise InvalidInputError(
+                f"Deployment region '{resolved_deployment_region}' is not in "
+                f"allowed regions: {regions}"
+            )
 
         try:
             WorkshopCreateInput(
@@ -385,7 +397,7 @@ class WorkshopService:
                         f"{settings.resource_group_prefix}"
                         f"-{workshop_id[:8]}-{created_user['alias']}"
                     ),
-                    "location": regions[0],
+                    "location": resolved_deployment_region,
                     "subscription_id": created_user["subscription_id"],
                     "tags": {
                         "workshop_id": workshop_id,
@@ -450,6 +462,7 @@ class WorkshopService:
                 "end_date": end_date,
                 "participants": successful_participants,
                 "base_resources_template": base_resources_template,
+                "deployment_region": resolved_deployment_region,
                 "policy": {
                     "allowed_regions": regions,
                     "denied_services": services,
@@ -473,6 +486,7 @@ class WorkshopService:
                 end_date=end_date,
                 participants=successful_participants,
                 base_resources_template=base_resources_template,
+                deployment_region=resolved_deployment_region,
                 policy=metadata["policy"],
                 status=WORKSHOP_STATUS_ACTIVE,
                 created_at=metadata["created_at"],
