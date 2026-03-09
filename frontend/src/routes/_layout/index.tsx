@@ -314,7 +314,7 @@ function SubscriptionSummary() {
 
 function Dashboard() {
   const { user } = useAuth()
-  const { createError, errorDetail, errorCode, failedParticipants } =
+  const { createError, errorDetail, failedParticipants } =
     Route.useSearch()
   const navigate = useNavigate()
   const [showError, setShowError] = useState(true)
