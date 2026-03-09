@@ -28,6 +28,14 @@ logger = logging.getLogger(__name__)
 _DEFAULT_CURRENCY = "USD"
 _COST_GRANULARITY = "Daily"
 
+# 워크샵 날짜는 KST(UTC+9) 기준으로 저장되므로 UTC 변환이 필요
+_KST_OFFSET = timedelta(hours=9)
+
+
+def _kst_naive_to_utc(dt: datetime) -> datetime:
+    """KST 기준 나이브 datetime을 UTC 나이브 datetime으로 변환한다."""
+    return dt - _KST_OFFSET
+
 
 def _parse_date_range(
     start_date_str: Optional[str],
@@ -36,14 +44,20 @@ def _parse_date_range(
 ) -> tuple[datetime, datetime, int]:
     """비용 조회용 날짜 범위를 파싱한다.
 
+    워크샵 날짜는 KST(UTC+9) 기준으로 저장되므로 UTC로 변환 후
+    Azure Cost API에 전달할 날짜 범위를 계산한다.
+    미래 날짜는 현재 UTC 시각으로 클램핑한다.
+
     Args:
-        start_date_str: ISO 형식 시작일 (선택).
-        end_date_str: ISO 형식 종료일 (선택).
+        start_date_str: ISO 형식 시작일 (KST 기준, 선택).
+        end_date_str: ISO 형식 종료일 (KST 기준, 선택).
         default_days: 날짜가 미지정 시 기본 조회 일수.
 
     Returns:
-        (start_date, end_date, period_days) 튜플.
+        (start_date, end_date, period_days) 튜플. 날짜는 UTC 기준.
     """
+    now = datetime.now(UTC).replace(tzinfo=None)
+
     if start_date_str and end_date_str:
         start_date = datetime.fromisoformat(
             start_date_str.replace("Z", "+00:00")
@@ -51,12 +65,20 @@ def _parse_date_range(
         end_date = datetime.fromisoformat(
             end_date_str.replace("Z", "+00:00")
         ).replace(tzinfo=None)
-        now = datetime.now(UTC).replace(tzinfo=None)
+
+        # KST → UTC 변환
+        start_date = _kst_naive_to_utc(start_date)
+        end_date = _kst_naive_to_utc(end_date)
+
+        # 미래 날짜를 현재 UTC 시각으로 클램핑
         if end_date > now:
             end_date = now
-        period_days = (end_date - start_date).days + 1
+        if start_date > now:
+            start_date = now
+
+        period_days = max((end_date - start_date).days + 1, 1)
     else:
-        end_date = datetime.now(UTC).replace(tzinfo=None)
+        end_date = now
         start_date = end_date - timedelta(days=default_days)
         period_days = default_days
 
@@ -241,6 +263,8 @@ class CostService:
             "total_cost": round(total_cost, 2),
             "currency": currency,
             "period_days": period_days,
+            "start_date": start_dt.isoformat(),
+            "end_date": end_dt.isoformat(),
             "subscriptions_count": len(seen_subs),
             "breakdown": breakdown,
         }
