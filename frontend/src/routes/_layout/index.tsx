@@ -346,7 +346,7 @@ function Dashboard() {
         <div className="flex flex-col gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
           <div className="flex items-center gap-2">
             <AlertCircle className="h-4 w-4 shrink-0" />
-            <span className="flex-1 font-medium">{createError}</span>
+            <span className="flex-1 font-medium">워크샵 생성에 실패했습니다. {createError}</span>
             <button
               onClick={handleDismissError}
               className="shrink-0 rounded-sm p-0.5 hover:bg-red-100 dark:hover:bg-red-900"
