@@ -414,18 +414,45 @@ export interface CreateWorkshopRequest {
   description?: string
 }
 
-// API Error type
+// API Error type — matches backend AppError.to_dict() format
 export interface ApiError {
-  detail: string
-  status?: number
+  error?: string
+  message?: string
+  detail?: string
+  details?: Record<string, unknown>
 }
 
-// Error handler
-export const handleApiError = (error: AxiosError<ApiError>): string => {
-  if (error.response?.data?.detail) {
-    return error.response.data.detail
+/** Extract a human-readable message from an Axios error response. */
+export const handleApiError = (error: AxiosError<ApiError>): ApiError => {
+  const data = error.response?.data
+  return {
+    error: data?.error,
+    message: data?.message || data?.detail || error.message || "An unexpected error occurred",
+    details: data?.details,
   }
-  return error.message || "An unexpected error occurred"
+}
+
+/** Error code to user-friendly Korean message mapping. */
+const ERROR_CODE_MESSAGES: Record<string, string> = {
+  INSUFFICIENT_SUBSCRIPTIONS: "사용 가능한 구독이 부족합니다.",
+  INVALID_INPUT: "입력값이 올바르지 않습니다.",
+  CSV_PARSING_ERROR: "참가자 CSV 파일 형식이 올바르지 않습니다.",
+  UNSUPPORTED_FILE_TYPE: "지원하지 않는 파일 형식입니다.",
+  INVALID_FORMAT: "입력 형식이 올바르지 않습니다.",
+  PARTICIPANT_SETUP_FAILED: "일부 참가자 설정에 실패했습니다.",
+  USER_CREATION_ERROR: "사용자 계정 생성에 실패했습니다.",
+  ENTRA_ID_AUTHORIZATION_ERROR: "사용자 생성 권한이 없습니다.",
+  POLICY_ASSIGNMENT_ERROR: "정책 할당에 실패했습니다.",
+  AZURE_AUTH_ERROR: "Azure 인증에 실패했습니다.",
+  SERVICE_UNAVAILABLE: "현재 서비스를 사용할 수 없습니다.",
+  STORAGE_SERVICE_ERROR: "데이터 저장에 실패했습니다.",
+  INTERNAL_ERROR: "예기치 않은 오류가 발생했습니다.",
+}
+
+/** Build a user-friendly Korean title from an error code. */
+export const getErrorTitle = (code?: string): string => {
+  if (code && ERROR_CODE_MESSAGES[code]) return ERROR_CODE_MESSAGES[code]
+  return "워크샵 생성 중 오류가 발생했습니다."
 }
 
 // Workshop API

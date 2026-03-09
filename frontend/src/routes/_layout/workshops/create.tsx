@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useMemo } from "react"
 import { ArrowLeft, ChevronDown, Upload, Plus, Trash2, X } from "lucide-react"
 import { Link } from "@tanstack/react-router"
 
-import { workshopApi, type CreateWorkshopRequest } from "@/client"
+import { workshopApi, handleApiError, getErrorTitle, type CreateWorkshopRequest, type ApiError } from "@/client"
 import useAuth from "@/hooks/useAuth"
 import { Button } from "@/components/ui/button"
 import {
@@ -168,8 +168,22 @@ function CreateWorkshop() {
       showSuccessToast("워크샵이 성공적으로 생성되었습니다")
       navigate({ to: "/" })
     },
-    onError: () => {
-      showErrorToast("워크샵 생성에 실패했습니다")
+    onError: (error) => {
+      const apiError = handleApiError(error as import("axios").AxiosError<ApiError>)
+      const title = getErrorTitle(apiError.error)
+      const failedParticipants = Array.isArray(apiError.details?.failed_participants)
+        ? JSON.stringify(apiError.details.failed_participants)
+        : undefined
+
+      navigate({
+        to: "/",
+        search: {
+          createError: title,
+          errorDetail: apiError.message,
+          errorCode: apiError.error,
+          failedParticipants,
+        },
+      })
     },
   })
 

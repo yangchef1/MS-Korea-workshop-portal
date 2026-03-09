@@ -501,10 +501,14 @@ class WorkshopService:
                     "; ".join(failed_details[:10]),
                 )
                 raise AppError(
-                    f"Workshop creation failed: {len(failed_details)} of "
-                    f"{len(participant_results)} participant(s) failed to setup. "
-                    f"Details: {'; '.join(failed_details[:5])}",
+                    f"{len(failed_details)} of "
+                    f"{len(participant_results)} participant(s) failed to setup.",
                     code="PARTICIPANT_SETUP_FAILED",
+                    details={
+                        "failed_participants": failed_details[:10],
+                        "total": len(participant_results),
+                        "failed": len(failed_details),
+                    },
                 )
 
             metadata = {

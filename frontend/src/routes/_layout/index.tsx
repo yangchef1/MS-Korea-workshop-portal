@@ -1,6 +1,6 @@
-import { createFileRoute } from "@tanstack/react-router"
+import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import { useQuery, useSuspenseQuery } from "@tanstack/react-query"
-import { Suspense } from "react"
+import { Suspense, useState } from "react"
 import { Link } from "@tanstack/react-router"
 import {
   Plus,
@@ -13,6 +13,9 @@ import {
   Shield,
   User,
   Loader2,
+  X,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react"
 
 import { workshopApi, subscriptionApi, type Workshop } from "@/client"
@@ -42,8 +45,37 @@ function getWorkshopsQueryOptions() {
   }
 }
 
+/** Search params schema for the dashboard route. */
+interface DashboardSearch {
+  createError?: string
+  errorDetail?: string
+  errorCode?: string
+  failedParticipants?: string
+}
+
+function parseFailedParticipants(serialized?: string): string[] {
+  if (!serialized) {
+    return []
+  }
+
+  try {
+    const parsed = JSON.parse(serialized)
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is string => typeof item === "string")
+      : []
+  } catch {
+    return []
+  }
+}
+
 export const Route = createFileRoute("/_layout/")({
   component: Dashboard,
+  validateSearch: (search: Record<string, unknown>): DashboardSearch => ({
+    createError: (search.createError as string) || undefined,
+    errorDetail: (search.errorDetail as string) || undefined,
+    errorCode: (search.errorCode as string) || undefined,
+    failedParticipants: (search.failedParticipants as string) || undefined,
+  }),
 })
 
 function WorkshopCard({ workshop }: { workshop: Workshop }) {
@@ -282,6 +314,18 @@ function SubscriptionSummary() {
 
 function Dashboard() {
   const { user } = useAuth()
+  const { createError, errorDetail, errorCode, failedParticipants } =
+    Route.useSearch()
+  const navigate = useNavigate()
+  const [showError, setShowError] = useState(true)
+  const [expanded, setExpanded] = useState(false)
+
+  const failedList = parseFailedParticipants(failedParticipants)
+
+  const handleDismissError = () => {
+    setShowError(false)
+    navigate({ to: "/", search: {} })
+  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -297,6 +341,47 @@ function Dashboard() {
       </div>
 
       <SubscriptionSummary />
+
+      {createError && showError && (
+        <div className="flex flex-col gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4 shrink-0" />
+            <span className="flex-1 font-medium">{createError}</span>
+            <button
+              onClick={handleDismissError}
+              className="shrink-0 rounded-sm p-0.5 hover:bg-red-100 dark:hover:bg-red-900"
+              aria-label="닫기"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          {errorDetail && (
+            <button
+              onClick={() => setExpanded(!expanded)}
+              className="flex items-center gap-1 text-xs text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-200"
+            >
+              {expanded ? (
+                <ChevronUp className="h-3 w-3" />
+              ) : (
+                <ChevronDown className="h-3 w-3" />
+              )}
+              {expanded ? "상세 접기" : "상세 보기"}
+            </button>
+          )}
+          {expanded && errorDetail && (
+            <div className="mt-1 rounded border border-red-200 bg-red-100/50 px-3 py-2 text-xs dark:border-red-800 dark:bg-red-900/50">
+              <p className="whitespace-pre-wrap break-all">{errorDetail}</p>
+              {failedList.length > 0 && (
+                <ul className="mt-2 list-disc pl-4 space-y-0.5">
+                  {failedList.map((item, i) => (
+                    <li key={i}>{item}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       <WorkshopsList />
     </div>
