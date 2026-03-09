@@ -533,8 +533,6 @@ async def get_workshop_cost(
         cost_data = await cost.get_workshop_total_cost(
             cost_specs, start_date=start_date, end_date=end_date
         )
-        cost_data["start_date"] = start_date
-        cost_data["end_date"] = end_date
     else:
         cost_data = await cost.get_workshop_total_cost(cost_specs, days=30)
 
