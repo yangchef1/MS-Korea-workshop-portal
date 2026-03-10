@@ -228,6 +228,77 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
 }
 
 // ---------------------------------------------------------------------------
+// Cleanup Job — replaces Azure Function timer (Phase 1)
+// ---------------------------------------------------------------------------
+resource cleanupJob 'Microsoft.App/jobs@2024-03-01' = {
+  name: 'job-workshop-cleanup-${environmentName}'
+  location: location
+  identity: {
+    type: 'SystemAssigned'
+  }
+  properties: {
+    environmentId: containerAppEnv.id
+    workloadProfileName: 'Consumption'
+    configuration: {
+      triggerType: 'Schedule'
+      replicaTimeout: 1800
+      replicaRetryLimit: 1
+      scheduleTriggerConfig: {
+        cronExpression: '0 * * * *' // Hourly polling; cleanup.py checks end_date + 1h < now
+      }
+      registries: usePlaceholder ? [] : [
+        {
+          server: 'ghcr.io'
+          username: 'ghcr-pull'
+          passwordSecretRef: 'ghcr-token'
+        }
+      ]
+      secrets: [
+        {
+          name: 'sp-client-secret'
+          value: spClientSecret
+        }
+        {
+          name: 'ghcr-token'
+          value: ghcrToken
+        }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'cleanup'
+          image: containerImage
+          command: [
+            'python'
+            '-m'
+            'app.jobs.cleanup'
+          ]
+          resources: {
+            cpu: json('0.5')
+            memory: '1Gi'
+          }
+          env: [
+            { name: 'AZURE_SUBSCRIPTION_ID', value: subscriptionIds[0] }
+            { name: 'ALLOWED_SUBSCRIPTION_IDS', value: allowedSubsJoined }
+            { name: 'AZURE_SP_TENANT_ID', value: tenantId }
+            { name: 'AZURE_SP_CLIENT_ID', value: spClientId }
+            { name: 'AZURE_SP_CLIENT_SECRET', secretRef: 'sp-client-secret' }
+            { name: 'AZURE_SP_DOMAIN', value: spDomain }
+            { name: 'TABLE_STORAGE_ACCOUNT', value: storageAccountName }
+            { name: 'LOG_FORMAT', value: 'json' }
+          ]
+        }
+      ]
+    }
+  }
+  tags: {
+    project: 'workshop-portal'
+    environment: environmentName
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Outputs
 // ---------------------------------------------------------------------------
 output fqdn string = containerApp.properties.configuration.ingress.fqdn
@@ -235,3 +306,5 @@ output appName string = containerApp.name
 output principalId string = containerApp.identity.principalId
 // Exposed for Phase 2 — Container Apps Job will reference this environment.
 output containerAppEnvId string = containerAppEnv.id
+output cleanupJobName string = cleanupJob.name
+output cleanupJobPrincipalId string = cleanupJob.identity.principalId

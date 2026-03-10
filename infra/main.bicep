@@ -175,3 +175,4 @@ output backendUrl string = 'https://${containerApps.outputs.fqdn}'
 output swaDefaultHostname string = swa.outputs.defaultHostname
 output swaDeploymentToken string = swa.outputs.deploymentToken
 output functionAppName string = functionApp.outputs.functionAppName
+output cleanupJobName string = containerApps.outputs.cleanupJobName
