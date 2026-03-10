@@ -18,13 +18,24 @@ logger = logging.getLogger(__name__)
 def extract_alias_from_email(email: str) -> str:
     """이메일 주소에서 alias를 추출한다.
 
+    도메인명(TLD 제외)을 suffix로 포함하여 다른 회사 참가자 간
+    alias 충돌을 방지한다.
+
+    Examples:
+        - aaa@kakaobank.com → aaa.kakaobank
+        - john@samsung.co.kr → john.samsung
+        - user@company.com → user.company
+
     Args:
-        email: 이메일 주소 (예: johndoe@domain.com)
+        email: 이메일 주소 (예: johndoe@company.com)
 
     Returns:
-        alias 부분 (예: johndoe)
+        alias 부분 (예: johndoe.company)
     """
-    return email.split('@')[0].lower()
+    local_part, domain = email.split('@')
+    # Extract first part of domain (before first dot) to use as company identifier
+    company = domain.split('.')[0].lower()
+    return f"{local_part.lower()}.{company}"
 
 
 def validate_email(email: str) -> bool:
