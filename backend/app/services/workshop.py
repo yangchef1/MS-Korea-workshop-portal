@@ -71,39 +71,70 @@ class WorkshopService:
         return metadata
 
     async def list_workshops(self) -> list[WorkshopResponse]:
-        """전체 워크샵 목록을 비용 정보와 함께 조회한다."""
+        """전체 워크샵 목록을 조회한다 (비용 정보 제외).
+
+        비용 정보는 별도의 get_workshops_costs()를 통해 lazy-load한다.
+        """
         workshops = await self.storage.list_all_workshops()
 
-        async def _enrich_workshop(workshop: dict) -> WorkshopResponse:
-            participants = workshop.get("participants", [])
-            cost_specs = self.build_cost_specs(participants)
-
-            estimated_cost = 0.0
-            currency = DEFAULT_CURRENCY
-
-            if cost_specs:
-                cost_data = await self.cost.get_workshop_total_cost(cost_specs, days=30)
-                estimated_cost = cost_data.get("total_cost", 0.0)
-                currency = cost_data.get("currency", DEFAULT_CURRENCY)
-
-            policy_data = workshop.get("policy", {})
-            return WorkshopResponse(
+        return [
+            WorkshopResponse(
                 id=workshop["id"],
                 name=workshop["name"],
                 start_date=workshop["start_date"],
                 end_date=workshop["end_date"],
-                participant_count=len(participants),
+                participant_count=len(workshop.get("participants", [])),
                 status=workshop.get("status", WORKSHOP_STATUS_ACTIVE),
                 created_at=workshop.get("created_at", ""),
-                estimated_cost=estimated_cost,
-                currency=currency,
+                estimated_cost=None,
+                currency=DEFAULT_CURRENCY,
                 created_by=workshop.get("created_by"),
                 description=workshop.get("description"),
-                allowed_regions=policy_data.get("allowed_regions", []),
+                allowed_regions=workshop.get("policy", {}).get("allowed_regions", []),
                 deployment_region=workshop.get("deployment_region", ""),
             )
+            for workshop in workshops
+        ]
 
-        return await asyncio.gather(*[_enrich_workshop(workshop) for workshop in workshops])
+    async def get_workshops_costs(self) -> dict[str, dict]:
+        """모든 워크샵의 비용을 일괄 조회한다.
+
+        워크샵 목록과 분리하여 비용만 lazy-load할 때 사용한다.
+
+        Returns:
+            워크샵 ID를 키로, {estimated_cost, currency}를 값으로 가지는 딕셔너리.
+        """
+        workshops = await self.storage.list_all_workshops()
+
+        async def _fetch_cost(workshop: dict) -> tuple[str, dict]:
+            """단일 워크샵의 비용을 조회한다."""
+            workshop_id = workshop["id"]
+            participants = workshop.get("participants", [])
+            cost_specs = self.build_cost_specs(participants)
+
+            if not cost_specs:
+                return workshop_id, {"estimated_cost": 0.0, "currency": DEFAULT_CURRENCY}
+
+            cost_data = await self.cost.get_workshop_total_cost(cost_specs, days=30)
+            return workshop_id, {
+                "estimated_cost": cost_data.get("total_cost", 0.0),
+                "currency": cost_data.get("currency", DEFAULT_CURRENCY),
+            }
+
+        results = await asyncio.gather(
+            *[_fetch_cost(w) for w in workshops],
+            return_exceptions=True,
+        )
+
+        costs: dict[str, dict] = {}
+        for result in results:
+            if isinstance(result, Exception):
+                logger.error("Failed to fetch workshop cost: %s", result)
+                continue
+            workshop_id, cost_info = result
+            costs[workshop_id] = cost_info
+
+        return costs
 
     async def get_workshop_detail(self, workshop_id: str) -> WorkshopDetail:
         """워크샵 상세 정보를 조회한다."""
@@ -200,9 +231,16 @@ class WorkshopService:
 
         if created_users:
             upns = [user.get("upn") for user in created_users if user.get("upn")]
+            upn_to_object_id = {
+                user["upn"]: user["object_id"]
+                for user in created_users
+                if user.get("upn") and user.get("object_id")
+            }
             if upns:
                 try:
-                    await self.entra_id.delete_users_bulk(upns)
+                    await self.entra_id.delete_users_bulk(
+                        upns, upn_to_object_id=upn_to_object_id,
+                    )
                     logger.info("Rollback: deleted %d Entra ID users", len(upns))
                 except Exception as e:
                     logger.error("Rollback: failed to delete users: %s", e)
@@ -604,7 +642,14 @@ class WorkshopService:
         rg_status = await self.resource_mgr.delete_resource_groups_bulk(rg_specs)
 
         upns = [participant.get("upn") for participant in participants]
-        user_status = await self.entra_id.delete_users_bulk(upns)
+        upn_to_object_id = {
+            p["upn"]: p["object_id"]
+            for p in participants
+            if p.get("upn") and p.get("object_id")
+        }
+        user_status = await self.entra_id.delete_users_bulk(
+            upns, upn_to_object_id=upn_to_object_id,
+        )
 
         failures: list[DeletionFailureItem] = []
         now_iso = datetime.now(UTC).isoformat()

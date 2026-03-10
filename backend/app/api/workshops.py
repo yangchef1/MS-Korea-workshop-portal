@@ -136,8 +136,19 @@ async def _get_workshop_or_raise(storage, workshop_id: str) -> dict:
 async def list_workshops(
     workshop_service=Depends(get_workshop_service),
 ):
-    """전체 워크샵 목록을 비용 정보와 함께 조회한다."""
+    """전체 워크샵 목록을 조회한다 (비용 제외, 빠른 응답)."""
     return await workshop_service.list_workshops()
+
+
+@router.get("/costs")
+async def get_workshops_costs(
+    workshop_service=Depends(get_workshop_service),
+):
+    """모든 워크샵의 비용을 일괄 조회한다 (lazy-load용).
+
+    워크샵 ID를 키, {estimated_cost, currency}를 값으로 하는 맵을 반환한다.
+    """
+    return await workshop_service.get_workshops_costs()
 
 
 @router.get("/{workshop_id}", response_model=WorkshopDetail)

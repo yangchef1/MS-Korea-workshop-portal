@@ -14,6 +14,9 @@ from app.services.storage import storage_service
 
 logger = logging.getLogger(__name__)
 
+# Stale-while-revalidate: background refresh starts this many seconds before expiry
+_REVALIDATE_AHEAD_SECONDS = 5
+
 
 class SubscriptionService:
     """Azure 구독을 조회하고 참가자에게 배정한다."""
@@ -22,11 +25,37 @@ class SubscriptionService:
         self._credential = get_azure_credential()
         self._azure_cache: list[dict[str, str]] = []
         self._cache_time: float = 0.0
+        self._revalidation_task: asyncio.Task | None = None
 
     def _cache_valid(self) -> bool:
         if not self._azure_cache:
             return False
         return (time.time() - self._cache_time) < settings.subscription_cache_ttl_seconds
+
+    def _should_revalidate(self) -> bool:
+        """캐시가 유효하나 만료 임박하여 백그라운드 갱신이 필요한지 확인한다."""
+        if not self._azure_cache:
+            return False
+        elapsed = time.time() - self._cache_time
+        ttl = settings.subscription_cache_ttl_seconds
+        return elapsed >= (ttl - _REVALIDATE_AHEAD_SECONDS) and elapsed < ttl
+
+    def _trigger_background_revalidation(self) -> None:
+        """캐시를 백그라운드에서 미리 갱신한다 (stale-while-revalidate)."""
+        if self._revalidation_task and not self._revalidation_task.done():
+            return
+        self._revalidation_task = asyncio.create_task(self._background_refresh())
+
+    async def _background_refresh(self) -> None:
+        """백그라운드에서 Azure 구독 목록을 갱신한다."""
+        try:
+            subscriptions = await self._fetch_azure_subscriptions()
+            self._azure_cache = subscriptions
+            self._cache_time = time.time()
+            logger.debug("Stale-while-revalidate: subscription cache refreshed")
+        except Exception as e:
+            # Background refresh failure is non-critical; stale cache will be used
+            logger.warning("Background subscription refresh failed: %s", e)
 
     async def _fetch_azure_subscriptions(self) -> list[dict[str, str]]:
         def _list_subscriptions() -> list[dict[str, str]]:
@@ -51,6 +80,9 @@ class SubscriptionService:
 
     async def _get_azure_subscriptions(self, force_refresh: bool = False) -> tuple[list[dict[str, str]], bool]:
         if self._cache_valid() and not force_refresh:
+            # Stale-while-revalidate: trigger background refresh when near expiry
+            if self._should_revalidate():
+                self._trigger_background_revalidation()
             return self._azure_cache, True
 
         subscriptions = await self._fetch_azure_subscriptions()

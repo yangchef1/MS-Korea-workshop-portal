@@ -164,8 +164,9 @@ class CostService:
             scope = f"/subscriptions/{sub_id}/resourceGroups/{resource_group_name}"
             query = _build_cost_query(start_date, end_date)
 
-            result = self._get_cost_client().query.usage(
-                scope=scope, parameters=query
+            client = self._get_cost_client()
+            result = await asyncio.to_thread(
+                client.query.usage, scope=scope, parameters=query,
             )
             total_cost, currency = _sum_cost_rows(result)
 
@@ -279,8 +280,9 @@ class CostService:
         try:
             scope = f"/subscriptions/{subscription_id}"
             query = _build_cost_query(start_date, end_date)
-            result = self._get_cost_client().query.usage(
-                scope=scope, parameters=query,
+            client = self._get_cost_client()
+            result = await asyncio.to_thread(
+                client.query.usage, scope=scope, parameters=query,
             )
             total_cost, currency = _sum_cost_rows(result)
             return {
