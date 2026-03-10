@@ -7,6 +7,11 @@ import logging
 from functools import lru_cache
 from typing import Optional
 
+# Entra ID replication delay can cause 404 when deleting a just-created user.
+# Retry with exponential backoff to handle eventual consistency.
+_DELETE_MAX_RETRIES = 3
+_DELETE_INITIAL_DELAY_SECONDS = 2.0
+
 from msgraph import GraphServiceClient
 from msgraph.generated.models.password_profile import PasswordProfile
 from msgraph.generated.models.user import User
@@ -157,68 +162,126 @@ class EntraIDService:
 
         return users
 
-    async def delete_user(self, user_principal_name: str) -> bool:
+    async def delete_user(
+        self,
+        user_principal_name: str,
+        object_id: Optional[str] = None,
+    ) -> bool:
         """Entra ID 사용자를 삭제한다.
 
+        object_id가 제공되면 UPN 조회를 건너뛰고 바로 삭제한다.
+        Entra ID 복제 지연으로 인한 404에 대비해 재시도 로직을 포함한다.
+
         Args:
-            user_principal_name: 사용자 UPN.
+            user_principal_name: 사용자 UPN (로깅/식별용).
+            object_id: 사용자 Object ID. 제공 시 UPN 조회를 생략한다.
 
         Returns:
             성공 시 True.
 
         Raises:
-            UserNotFoundError: 사용자를 찾을 수 없는 경우.
+            UserNotFoundError: 재시도 후에도 사용자를 찾을 수 없는 경우.
             EntraIDAuthorizationError: 삭제 권한이 없는 경우.
             UserDeletionError: 삭제에 실패한 경우.
         """
-        try:
-            user = await self.client.users.by_user_id(user_principal_name).get()
-            if not user:
-                return False
+        last_exception: Optional[Exception] = None
 
-            await self.client.users.by_user_id(user.id).delete()
-            logger.info("Deleted Entra ID user: %s", user_principal_name)
-            return True
-        except Exception as e:
-            logger.error("Failed to delete user %s: %s", user_principal_name, e)
-            error_code, _ = self._extract_graph_error(e)
+        for attempt in range(_DELETE_MAX_RETRIES):
+            try:
+                if object_id:
+                    # object_id가 있으면 GET 조회 없이 바로 삭제
+                    await self.client.users.by_user_id(object_id).delete()
+                else:
+                    # object_id가 없으면 UPN으로 조회 후 삭제
+                    user = await self.client.users.by_user_id(
+                        user_principal_name,
+                    ).get()
+                    if not user:
+                        return False
+                    await self.client.users.by_user_id(user.id).delete()
 
-            if (
-                error_code == _ERROR_CODE_RESOURCE_NOT_FOUND
-                or str(_HTTP_NOT_FOUND) in str(e)
-            ):
-                raise UserNotFoundError(
-                    f"User '{user_principal_name}' not found",
+                logger.info("Deleted Entra ID user: %s", user_principal_name)
+                return True
+
+            except Exception as e:
+                error_code, _ = self._extract_graph_error(e)
+
+                # 권한 에러는 재시도해도 소용없으므로 즉시 raise
+                if self._is_authorization_error(error_code, None, str(e)):
+                    logger.error(
+                        "Failed to delete user %s: %s", user_principal_name, e,
+                    )
+                    raise EntraIDAuthorizationError(
+                        f"Insufficient permissions to delete user "
+                        f"'{user_principal_name}'. "
+                        "Ensure the application has User.ReadWrite.All permission."
+                    )
+
+                # 404 (복제 지연 가능) → 재시도
+                is_not_found = (
+                    error_code == _ERROR_CODE_RESOURCE_NOT_FOUND
+                    or str(_HTTP_NOT_FOUND) in str(e)
+                )
+                if is_not_found and attempt < _DELETE_MAX_RETRIES - 1:
+                    delay = _DELETE_INITIAL_DELAY_SECONDS * (2 ** attempt)
+                    logger.warning(
+                        "User %s not found (attempt %d/%d), "
+                        "retrying in %.1fs (replication delay)",
+                        user_principal_name,
+                        attempt + 1,
+                        _DELETE_MAX_RETRIES,
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+                    last_exception = e
+                    continue
+
+                # 최종 404 → 이미 삭제된 것으로 간주 (idempotent)
+                if is_not_found:
+                    logger.warning(
+                        "User %s not found after %d retries; "
+                        "treating as already deleted",
+                        user_principal_name,
+                        _DELETE_MAX_RETRIES,
+                    )
+                    return True
+
+                # 기타 에러
+                logger.error(
+                    "Failed to delete user %s: %s", user_principal_name, e,
+                )
+                raise UserDeletionError(
+                    f"Failed to delete user '{user_principal_name}': {e}",
                     user_id=user_principal_name,
                 )
 
-            if (
-                error_code == _ERROR_CODE_AUTHORIZATION_DENIED
-                or str(_HTTP_FORBIDDEN) in str(e)
-            ):
-                raise EntraIDAuthorizationError(
-                    f"Insufficient permissions to delete user "
-                    f"'{user_principal_name}'. "
-                    "Ensure the application has User.ReadWrite.All permission."
-                )
-
-            raise UserDeletionError(
-                f"Failed to delete user '{user_principal_name}': {e}",
-                user_id=user_principal_name,
-            )
+        # _DELETE_MAX_RETRIES 모두 소진 (이론적으로 도달하지 않음)
+        raise UserDeletionError(
+            f"Failed to delete user '{user_principal_name}' "
+            f"after {_DELETE_MAX_RETRIES} retries: {last_exception}",
+            user_id=user_principal_name,
+        )
 
     async def delete_users_bulk(
-        self, user_principal_names: list[str]
+        self,
+        user_principal_names: list[str],
+        upn_to_object_id: Optional[dict[str, str]] = None,
     ) -> dict[str, bool]:
         """여러 Entra ID 사용자를 동시에 삭제한다.
 
         Args:
             user_principal_names: UPN 목록.
+            upn_to_object_id: UPN → Object ID 매핑. 제공 시 UPN 조회를 생략하고
+                Object ID로 직접 삭제하여 Entra ID 복제 지연 문제를 회피한다.
 
         Returns:
             UPN을 키로, 삭제 성공 여부를 값으로 가진 딕셔너리.
         """
-        tasks = [self.delete_user(upn) for upn in user_principal_names]
+        id_map = upn_to_object_id or {}
+        tasks = [
+            self.delete_user(upn, object_id=id_map.get(upn))
+            for upn in user_principal_names
+        ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         status = {}
