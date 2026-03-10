@@ -455,10 +455,22 @@ export const getErrorTitle = (code?: string): string => {
   return "워크샵 생성 중 오류가 발생했습니다."
 }
 
+/** Per-workshop cost info returned by the batch costs endpoint. */
+export interface WorkshopCostSummary {
+  estimated_cost: number
+  currency: string
+}
+
 // Workshop API
 export const workshopApi = {
   list: async (): Promise<Workshop[]> => {
     const response = await apiClient.get<Workshop[]>("/workshops")
+    return response.data
+  },
+
+  /** Batch-fetch estimated costs for all workshops (lazy-load). */
+  costs: async (): Promise<Record<string, WorkshopCostSummary>> => {
+    const response = await apiClient.get<Record<string, WorkshopCostSummary>>("/workshops/costs")
     return response.data
   },
 
