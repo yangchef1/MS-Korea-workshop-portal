@@ -238,10 +238,18 @@ class WorkshopService:
             }
             if upns:
                 try:
-                    await self.entra_id.delete_users_bulk(
+                    user_status = await self.entra_id.delete_users_bulk(
                         upns, upn_to_object_id=upn_to_object_id,
                     )
-                    logger.info("Rollback: deleted %d Entra ID users", len(upns))
+                    succeeded = sum(1 for v in user_status.values() if v)
+                    failed = len(user_status) - succeeded
+                    if failed:
+                        logger.warning(
+                            "Rollback: deleted %d/%d Entra ID users (%d failed)",
+                            succeeded, len(user_status), failed,
+                        )
+                    else:
+                        logger.info("Rollback: deleted %d Entra ID users", succeeded)
                 except Exception as e:
                     logger.error("Rollback: failed to delete users: %s", e)
 
