@@ -149,23 +149,6 @@ module containerApps 'modules/container-apps.bicep' = {
   }
 }
 
-// 6. Function App (Workshop Cleanup)
-module functionApp 'modules/function-app.bicep' = {
-  name: 'func-${environmentName}'
-  scope: portalRg
-  params: {
-    environmentName: environmentName
-    location: location
-    subscriptionIds: subscriptionIds
-    tenantId: tenantId
-    spClientId: spClientId
-    spClientSecret: spClientSecret
-    spDomain: spDomain
-    storageAccountName: storageAccountName
-    workshopStorageAccountId: storage.outputs.storageAccountId
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Outputs
 // ---------------------------------------------------------------------------
@@ -174,6 +157,5 @@ output containerAppFqdn string = containerApps.outputs.fqdn
 output backendUrl string = 'https://${containerApps.outputs.fqdn}'
 output swaDefaultHostname string = swa.outputs.defaultHostname
 output swaDeploymentToken string = swa.outputs.deploymentToken
-output functionAppName string = functionApp.outputs.functionAppName
 output cleanupJobName string = containerApps.outputs.cleanupJobName
 output provisionJobName string = containerApps.outputs.provisionJobName
