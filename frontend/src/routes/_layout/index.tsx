@@ -123,6 +123,9 @@ function WorkshopCard({ workshop }: { workshop: Workshop }) {
             {workshop.status === "scheduled" && (
               <Clock className="inline h-3 w-3 mr-1" />
             )}
+            {workshop.status === "completed" && (
+              <CheckCircle2 className="inline h-3 w-3 mr-1" />
+            )}
             {workshop.status}
           </span>
         </div>
@@ -189,9 +192,22 @@ function WorkshopsListContent() {
     )
   }
 
+  // Sort: active statuses first (creating, active, scheduled, failed), then completed at the bottom
+  const STATUS_ORDER: Record<string, number> = {
+    creating: 0,
+    active: 1,
+    scheduled: 2,
+    failed: 3,
+    completed: 4,
+    deleted: 5,
+  }
+  const sorted = [...workshops].sort(
+    (a, b) => (STATUS_ORDER[a.status] ?? 99) - (STATUS_ORDER[b.status] ?? 99)
+  )
+
   return (
     <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-      {workshops.map((workshop) => (
+      {sorted.map((workshop) => (
         <WorkshopCard key={workshop.id} workshop={workshop} />
       ))}
     </div>

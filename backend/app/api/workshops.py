@@ -357,22 +357,29 @@ async def _retry_single_failure(
 async def _finalize_workshop_if_resolved(
     workshop_id: str, storage
 ) -> bool:
-    """워크샵의 모든 삭제 실패가 해결되었으면 메타데이터를 정리한다.
+    """워크샵의 모든 삭제 실패가 해결되었으면 상태를 completed로 전환한다.
 
     Args:
         workshop_id: 워크샵 ID.
         storage: StorageService 인스턴스.
 
     Returns:
-        워크샵이 정리되었으면 True.
+        워크샵이 completed로 전환되었으면 True.
     """
     remaining = await storage.list_deletion_failures_by_workshop(workshop_id)
     if remaining:
         return False
 
-    await storage.delete_workshop_metadata(workshop_id)
+    metadata = await storage.get_workshop_metadata(workshop_id)
+    if metadata:
+        sensitive_fields = ("password", "object_id")
+        for participant in metadata.get("participants", []):
+            for field in sensitive_fields:
+                participant.pop(field, None)
+        metadata["status"] = "completed"
+        await storage.save_workshop_metadata(workshop_id, metadata)
     logger.info(
-        "All failures resolved — workshop %s metadata deleted",
+        "All failures resolved — workshop %s status set to completed",
         workshop_id,
     )
     return True
@@ -410,7 +417,7 @@ async def retry_deletion(
         )
         detail = "Resource deleted successfully"
         if workshop_finalized:
-            detail += ". All failures resolved — workshop cleaned up."
+            detail += ". All failures resolved — workshop marked as completed."
         return MessageResponse(message="Retry succeeded", detail=detail)
 
     return MessageResponse(
@@ -455,7 +462,7 @@ async def retry_all_deletions(
     )
     detail = f"{succeeded} succeeded, {failed} failed"
     if workshop_finalized:
-        detail += ". All failures resolved — workshop cleaned up."
+        detail += ". All failures resolved — workshop marked as completed."
 
     return MessageResponse(
         message="Retry all completed",
