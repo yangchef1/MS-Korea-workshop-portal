@@ -262,6 +262,28 @@ class SurveyUrlUpdate(BaseModel):
     )
 
 
+class EndDateExtension(BaseModel):
+    """워크샵 종료 시간 연장 요청."""
+
+    new_end_date: str = Field(
+        ...,
+        description="연장할 종료 날짜 (ISO 형식, 예: 2025-01-20T18:00)",
+    )
+
+    @field_validator("new_end_date")
+    @classmethod
+    def validate_date_format(cls, value: str) -> str:
+        """날짜 문자열이 ISO 8601 형식인지 검증한다."""
+        try:
+            datetime.fromisoformat(value)
+        except ValueError:
+            raise ValueError(
+                f"Invalid date format: '{value}'. "
+                "Expected ISO 8601 (e.g., '2025-01-20T18:00')"
+            )
+        return value
+
+
 class ErrorResponse(BaseModel):
     """에러 응답."""
 
