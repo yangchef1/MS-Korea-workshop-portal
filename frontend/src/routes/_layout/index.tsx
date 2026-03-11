@@ -13,6 +13,7 @@ import {
   Shield,
   User,
   Loader2,
+  Clock,
   X,
   ChevronDown,
   ChevronUp,
@@ -83,6 +84,8 @@ function WorkshopCard({ workshop }: { workshop: Workshop }) {
     active: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300",
     completed: "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300",
     creating: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300",
+    scheduled:
+      "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-300",
     failed: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300",
     deleted: "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300",
   }
@@ -117,6 +120,9 @@ function WorkshopCard({ workshop }: { workshop: Workshop }) {
             {isCreating && (
               <Loader2 className="inline h-3 w-3 mr-1 animate-spin" />
             )}
+            {workshop.status === "scheduled" && (
+              <Clock className="inline h-3 w-3 mr-1" />
+            )}
             {workshop.status}
           </span>
         </div>
@@ -136,7 +142,9 @@ function WorkshopCard({ workshop }: { workshop: Workshop }) {
           )}
           <div className="flex items-center gap-1">
             <Users className="h-4 w-4 shrink-0" />
-            {workshop.participant_count ?? workshop.participants?.length ?? 0} 참가자
+            {workshop.status === "scheduled"
+              ? `${workshop.planned_participant_count ?? 0} 예정`
+              : `${workshop.participant_count ?? workshop.participants?.length ?? 0} 참가자`}
           </div>
           <div className="flex items-center gap-1">
             <Calendar className="h-4 w-4 shrink-0" />

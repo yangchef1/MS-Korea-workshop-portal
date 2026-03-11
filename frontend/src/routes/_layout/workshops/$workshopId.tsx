@@ -800,9 +800,13 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
     active: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300",
     completed: "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300",
     creating: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300",
+    scheduled:
+      "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-300",
     failed: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300",
     deleted: "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300",
   }
+
+  const isScheduled = workshop.status === "scheduled"
 
   return (
     <div className="flex flex-col gap-6">
@@ -828,14 +832,16 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
           </div>
         </div>
         <div className="flex gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => workshopApi.downloadPasswords(workshop.id)}
-          >
-            <Download className="h-4 w-4 mr-2" />
-            계정 정보 다운로드
-          </Button>
+          {!isScheduled && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => workshopApi.downloadPasswords(workshop.id)}
+            >
+              <Download className="h-4 w-4 mr-2" />
+              계정 정보 다운로드
+            </Button>
+          )}
           <AlertDialog>
             <AlertDialogTrigger asChild>
               <Button variant="destructive" size="sm" disabled={deleteMutation.isPending}>
@@ -847,7 +853,9 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
               <AlertDialogHeader>
                 <AlertDialogTitle>워크샵을 삭제하시겠습니까?</AlertDialogTitle>
                 <AlertDialogDescription>
-                  워크샵 "{workshop.name}"을(를) 삭제하면 관련된 리소스 그룹과 참가자 계정이 모두 삭제됩니다. 이 작업은 되돌릴 수 없습니다.
+                  {isScheduled
+                    ? `예약된 워크샵 "${workshop.name}"을(를) 삭제합니다. 아직 리소스가 생성되지 않았으므로 즉시 삭제됩니다.`
+                    : `워크샵 "${workshop.name}"을(를) 삭제하면 관련된 리소스 그룹과 참가자 계정이 모두 삭제됩니다. 이 작업은 되돌릴 수 없습니다.`}
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
@@ -888,9 +896,13 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
             <div className="flex flex-col gap-2">
               <div className="flex items-center gap-2 text-muted-foreground">
                 <Users className="h-4 w-4" />
-                <span className="text-sm">참가자</span>
+                <span className="text-sm">{isScheduled ? "예정 참가자" : "참가자"}</span>
               </div>
-              <p className="text-xl font-semibold">{workshop.participants?.length || 0}명</p>
+              <p className="text-xl font-semibold">
+                {isScheduled
+                  ? `${workshop.planned_participants?.length ?? workshop.planned_participant_count ?? 0}명`
+                  : `${workshop.participants?.length || 0}명`}
+              </p>
             </div>
           </CardContent>
         </Card>
@@ -941,11 +953,13 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
         <TabsContent value="participants" className="mt-4">
           <Card>
             <CardHeader>
-              <CardTitle>참가자 목록</CardTitle>
+              <CardTitle>{isScheduled ? "예정 참가자 목록" : "참가자 목록"}</CardTitle>
               <CardDescription>
-                워크샵에 등록된 참가자 목록입니다
+                {isScheduled
+                  ? "프로비저닝 대기 중인 참가자 목록입니다. 시작 시각 1시간 전에 자동으로 프로비저닝됩니다."
+                  : "워크샵에 등록된 참가자 목록입니다"}
               </CardDescription>
-              {invalidAliases.size > 0 && (
+              {!isScheduled && invalidAliases.size > 0 && (
                 <div className="flex items-center gap-2 text-sm text-amber-600 mt-1">
                   <AlertTriangle className="h-4 w-4" />
                   유효하지 않은 구독이 배정된 참가자 {invalidAliases.size}명. 관리자만 재배정할 수 있습니다.
@@ -953,7 +967,27 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
               )}
             </CardHeader>
             <CardContent>
-              {workshop.participants && workshop.participants.length > 0 ? (
+              {isScheduled ? (
+                workshop.planned_participants && workshop.planned_participants.length > 0 ? (
+                  <div className="space-y-3">
+                    {workshop.planned_participants.map((p, index) => (
+                      <div
+                        key={p.alias || index}
+                        className="flex items-center gap-4 p-3 border rounded-lg"
+                      >
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium truncate">{p.alias}</p>
+                          <p className="text-sm text-muted-foreground truncate">{p.email}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-muted-foreground text-center py-8">
+                    예정된 참가자가 없습니다
+                  </p>
+                )
+              ) : workshop.participants && workshop.participants.length > 0 ? (
                 <div className="space-y-3">
                   {workshop.participants.map((participant, index) => (
                     <ParticipantRow

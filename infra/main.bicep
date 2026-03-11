@@ -176,3 +176,4 @@ output swaDefaultHostname string = swa.outputs.defaultHostname
 output swaDeploymentToken string = swa.outputs.deploymentToken
 output functionAppName string = functionApp.outputs.functionAppName
 output cleanupJobName string = containerApps.outputs.cleanupJobName
+output provisionJobName string = containerApps.outputs.provisionJobName

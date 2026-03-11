@@ -163,9 +163,13 @@ function CreateWorkshop() {
 
   const createMutation = useMutation({
     mutationFn: (data: CreateWorkshopRequest) => workshopApi.create(data),
-    onSuccess: () => {
+    onSuccess: (response) => {
       queryClient.invalidateQueries({ queryKey: ["workshops"] })
-      showSuccessToast("워크샵이 성공적으로 생성되었습니다")
+      if (response?.status === "scheduled") {
+        showSuccessToast("워크샵이 예약되었습니다. 시작 시각 1시간 전에 자동으로 프로비저닝됩니다.")
+      } else {
+        showSuccessToast("워크샵이 성공적으로 생성되었습니다")
+      }
       navigate({ to: "/" })
     },
     onError: (error) => {

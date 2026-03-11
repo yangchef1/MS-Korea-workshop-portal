@@ -1039,6 +1039,7 @@ def _workshop_to_entity(workshop_id: str, metadata: dict[str, Any]) -> dict[str,
         "start_date": metadata.get("start_date", ""),
         "end_date": metadata.get("end_date", ""),
         "base_resources_template": metadata.get("base_resources_template", ""),
+        "deployment_region": metadata.get("deployment_region", ""),
         "status": metadata.get("status", "active"),
         "created_at": metadata.get("created_at", ""),
         "created_by": metadata.get("created_by", ""),
@@ -1047,6 +1048,9 @@ def _workshop_to_entity(workshop_id: str, metadata: dict[str, Any]) -> dict[str,
         # JSON-serialized complex fields
         "participants_json": json.dumps(
             metadata.get("participants", []), default=str
+        ),
+        "planned_participants_json": json.dumps(
+            metadata.get("planned_participants", []), default=str
         ),
         "policy_json": json.dumps(metadata.get("policy", {}), default=str),
     }
@@ -1060,12 +1064,14 @@ def _entity_to_workshop(entity: dict[str, Any]) -> dict[str, Any]:
         "start_date": entity.get("start_date", ""),
         "end_date": entity.get("end_date", ""),
         "base_resources_template": entity.get("base_resources_template", ""),
+        "deployment_region": entity.get("deployment_region", ""),
         "status": entity.get("status", "active"),
         "created_at": entity.get("created_at", ""),
         "created_by": entity.get("created_by"),
         "description": entity.get("description"),
         "survey_url": entity.get("survey_url", ""),
         "participants": json.loads(entity.get("participants_json", "[]")),
+        "planned_participants": json.loads(entity.get("planned_participants_json", "[]")),
         "policy": json.loads(entity.get("policy_json", "{}")),
     }
 
