@@ -4,7 +4,7 @@
 # Detects which directories changed and dispatches to reusable workflows.
 #
 # Flow:
-#   detect-changes → deploy-infra → (deploy-backend ∥ deploy-frontend ∥ deploy-function)
+#   detect-changes → deploy-infra → (deploy-backend ∥ deploy-frontend)
 #
 # Branch → Environment mapping:
 #   main → prod,  dev → dev
@@ -13,7 +13,6 @@
 #   infra/**           → infra  (+ triggers ALL other components)
 #   backend/** | Dockerfile → backend
 #   frontend/**        → frontend
-#   function/**        → function
 
 name: Deploy
 
@@ -34,10 +33,6 @@ on:
         description: "Force deploy frontend"
         type: boolean
         default: false
-      deploy_function:
-        description: "Force deploy function"
-        type: boolean
-        default: false
 
 # ---------------------------------------------------------------------------
 # Job: Detect Changes
@@ -51,7 +46,6 @@ jobs:
       infra: ${{ steps.filter.outputs.infra }}
       backend: ${{ steps.filter.outputs.backend }}
       frontend: ${{ steps.filter.outputs.frontend }}
-      function: ${{ steps.filter.outputs.function }}
     steps:
       - uses: actions/checkout@v4
 
@@ -76,8 +70,6 @@ jobs:
               - 'Dockerfile'
             frontend:
               - 'frontend/**'
-            function:
-              - 'function/**'
 
   # ---------------------------------------------------------------------------
   # Job: Deploy Infrastructure (Bicep)
@@ -137,27 +129,6 @@ jobs:
       # Pass the FQDN from infra output so frontend always points to the current backend.
       # If infra was skipped, the frontend workflow resolves the URL from Azure directly.
       api_base_url: ${{ needs.deploy-infra.outputs.backend_url }}
-    secrets: inherit
-    permissions:
-      id-token: write
-      contents: read
-
-  # ---------------------------------------------------------------------------
-  # Job: Deploy Azure Functions
-  # ---------------------------------------------------------------------------
-  deploy-function:
-    name: Function
-    needs: [detect-changes, deploy-infra]
-    if: >-
-      always() && !failure() && !cancelled()
-      && (
-        needs.detect-changes.outputs.function == 'true'
-        || needs.detect-changes.outputs.infra == 'true'
-        || (github.event_name == 'workflow_dispatch' && inputs.deploy_function)
-      )
-    uses: ./.github/workflows/_deploy-function.yml
-    with:
-      environment: ${{ needs.detect-changes.outputs.environment }}
     secrets: inherit
     permissions:
       id-token: write

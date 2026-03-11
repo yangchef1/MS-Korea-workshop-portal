@@ -1,6 +1,0 @@
-# Azure Function requirements
-azure-functions==1.19.0
-azure-identity==1.15.0
-azure-mgmt-resource==23.0.1
-azure-data-tables==12.5.0
-msgraph-sdk==1.2.0
