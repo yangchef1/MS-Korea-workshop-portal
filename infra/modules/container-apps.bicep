@@ -299,6 +299,77 @@ resource cleanupJob 'Microsoft.App/jobs@2024-03-01' = {
 }
 
 // ---------------------------------------------------------------------------
+// Provision Job — pre-provisions scheduled workshops (Phase 2)
+// ---------------------------------------------------------------------------
+resource provisionJob 'Microsoft.App/jobs@2024-03-01' = {
+  name: 'job-workshop-provision-${environmentName}'
+  location: location
+  identity: {
+    type: 'SystemAssigned'
+  }
+  properties: {
+    environmentId: containerAppEnv.id
+    workloadProfileName: 'Consumption'
+    configuration: {
+      triggerType: 'Schedule'
+      replicaTimeout: 3600 // Provisioning can take longer than cleanup
+      replicaRetryLimit: 1
+      scheduleTriggerConfig: {
+        cronExpression: '0 * * * *' // Hourly polling; provision.py checks start_date - 1h <= now
+      }
+      registries: usePlaceholder ? [] : [
+        {
+          server: 'ghcr.io'
+          username: 'ghcr-pull'
+          passwordSecretRef: 'ghcr-token'
+        }
+      ]
+      secrets: [
+        {
+          name: 'sp-client-secret'
+          value: spClientSecret
+        }
+        {
+          name: 'ghcr-token'
+          value: ghcrToken
+        }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'provision'
+          image: containerImage
+          command: [
+            'python'
+            '-m'
+            'app.jobs.provision'
+          ]
+          resources: {
+            cpu: json('0.5')
+            memory: '1Gi'
+          }
+          env: [
+            { name: 'AZURE_SUBSCRIPTION_ID', value: subscriptionIds[0] }
+            { name: 'ALLOWED_SUBSCRIPTION_IDS', value: allowedSubsJoined }
+            { name: 'AZURE_SP_TENANT_ID', value: tenantId }
+            { name: 'AZURE_SP_CLIENT_ID', value: spClientId }
+            { name: 'AZURE_SP_CLIENT_SECRET', secretRef: 'sp-client-secret' }
+            { name: 'AZURE_SP_DOMAIN', value: spDomain }
+            { name: 'TABLE_STORAGE_ACCOUNT', value: storageAccountName }
+            { name: 'LOG_FORMAT', value: 'json' }
+          ]
+        }
+      ]
+    }
+  }
+  tags: {
+    project: 'workshop-portal'
+    environment: environmentName
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Outputs
 // ---------------------------------------------------------------------------
 output fqdn string = containerApp.properties.configuration.ingress.fqdn
@@ -308,3 +379,5 @@ output principalId string = containerApp.identity.principalId
 output containerAppEnvId string = containerAppEnv.id
 output cleanupJobName string = cleanupJob.name
 output cleanupJobPrincipalId string = cleanupJob.identity.principalId
+output provisionJobName string = provisionJob.name
+output provisionJobPrincipalId string = provisionJob.identity.principalId

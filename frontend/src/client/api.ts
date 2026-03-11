@@ -264,11 +264,16 @@ export interface Participant {
   subscription_id?: string
 }
 
+export interface PlannedParticipant {
+  alias: string
+  email: string
+}
+
 export interface Workshop {
   id: string
   name: string
   description?: string
-  status: "active" | "completed" | "creating" | "failed" | "deleted"
+  status: "active" | "completed" | "creating" | "failed" | "deleted" | "scheduled"
   region?: string
   deployment_region?: string
   policy?: {
@@ -281,7 +286,9 @@ export interface Workshop {
   start_date: string
   end_date: string
   participants?: Participant[]
+  planned_participants?: PlannedParticipant[]
   participant_count?: number
+  planned_participant_count?: number
   created_at: string
   created_by?: string
   updated_at?: string

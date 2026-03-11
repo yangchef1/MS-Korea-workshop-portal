@@ -2,6 +2,7 @@
 import asyncio
 import logging
 import time
+from datetime import datetime
 from functools import lru_cache
 from typing import Any
 
@@ -133,6 +134,70 @@ class SubscriptionService:
             "in_use_map": in_use_map,
             "from_cache": from_cache and not force_refresh,
         }
+
+    async def check_temporal_availability(
+        self,
+        start_date: str,
+        end_date: str,
+        participant_count: int,
+        exclude_workshop_id: str | None = None,
+    ) -> None:
+        """워크샵 기간 겹침 기반으로 구독 가용성을 검증한다.
+
+        실제 구독을 잠그지 않고, 기간이 겹치는 기존 워크샵들의
+        (예상) 구독 사용량과 신규 참가자 수를 합산하여 풀 크기를 초과하는지
+        확인한다.
+
+        Args:
+            start_date: 워크샵 시작 날짜 (ISO 형식 문자열).
+            end_date: 워크샵 종료 날짜 (ISO 형식 문자열).
+            participant_count: 신규 워크샵 참가자 수.
+            exclude_workshop_id: 겹침 계산에서 제외할 워크샵 ID (수정 시).
+
+        Raises:
+            InsufficientSubscriptionsError: 예상 구독 부족 시.
+            ServiceUnavailableError: 구독이 전혀 없는 경우.
+        """
+        available_result = await self.get_available_subscriptions()
+        pool_size = len(available_result["subscriptions"])
+
+        if pool_size == 0:
+            raise ServiceUnavailableError("No available subscriptions to assign")
+
+        workshops = await storage_service.list_all_workshops()
+        new_start = datetime.fromisoformat(start_date)
+        new_end = datetime.fromisoformat(end_date)
+
+        overlapping_count = 0
+        for ws in workshops:
+            if ws.get("status") not in ("active", "creating", "scheduled"):
+                continue
+            if exclude_workshop_id and ws.get("id") == exclude_workshop_id:
+                continue
+
+            ws_start_str = ws.get("start_date", "")
+            ws_end_str = ws.get("end_date", "")
+            if not ws_start_str or not ws_end_str:
+                continue
+
+            ws_start = datetime.fromisoformat(ws_start_str)
+            ws_end = datetime.fromisoformat(ws_end_str)
+
+            # Check period overlap: [A_start, A_end] ∩ [B_start, B_end] != ∅
+            if ws_start <= new_end and new_start <= ws_end:
+                # active/creating: count actual participants
+                participants = ws.get("participants", [])
+                planned = ws.get("planned_participants", [])
+                overlapping_count += max(len(participants), len(planned))
+
+        if overlapping_count + participant_count > pool_size:
+            raise InsufficientSubscriptionsError(
+                f"{participant_count} subscriptions required but only "
+                f"{pool_size - overlapping_count} available during the period "
+                f"({overlapping_count} used by overlapping workshops)",
+                required=participant_count,
+                available=pool_size - overlapping_count,
+            )
 
     async def assign_subscriptions(
         self, participants: list[dict[str, str]], workshop_id: str,

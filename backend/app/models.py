@@ -119,6 +119,13 @@ class InvalidParticipant(BaseModel):
     subscription_id: str
 
 
+class PlannedParticipant(BaseModel):
+    """예약 워크샵에 저장되는 사전 참가자 데이터 (CSV 파싱 결과)."""
+
+    email: str
+    alias: str
+
+
 class PolicyData(BaseModel):
     """워크샵 메타데이터에 저장되는 정책 데이터."""
 
@@ -128,7 +135,7 @@ class PolicyData(BaseModel):
     vm_sku_preset: Optional[str] = None
 
 
-WORKSHOP_VALID_STATUSES = {"active", "completed", "creating", "deleted", "failed"}
+WORKSHOP_VALID_STATUSES = {"active", "completed", "creating", "deleted", "failed", "scheduled"}
 
 
 class WorkshopCreateInput(BaseModel):
@@ -160,6 +167,7 @@ class WorkshopMetadata(BaseModel):
     start_date: str
     end_date: str
     participants: list[ParticipantData] = []
+    planned_participants: list[PlannedParticipant] = []
     base_resources_template: str
     deployment_region: str = Field(
         default="",
@@ -192,6 +200,7 @@ class WorkshopResponse(BaseModel):
     start_date: str
     end_date: str
     participant_count: int
+    planned_participant_count: int = 0
     status: str
     created_at: str
     estimated_cost: Optional[float] = 0.0
@@ -210,6 +219,8 @@ class WorkshopDetail(BaseModel):
     start_date: str
     end_date: str
     participants: list[ParticipantData]
+    planned_participants: list[PlannedParticipant] = []
+    planned_participant_count: int = 0
     base_resources_template: str
     deployment_region: str = ""
     policy: PolicyData
