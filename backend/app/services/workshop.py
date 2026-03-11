@@ -26,6 +26,7 @@ WORKSHOP_DENIED_RESOURCES_ASSIGNMENT = "workshop-denied-resources"
 WORKSHOP_ALLOWED_VM_SKUS_ASSIGNMENT = "workshop-allowed-vm-skus"
 
 WORKSHOP_STATUS_ACTIVE = "active"
+WORKSHOP_STATUS_COMPLETED = "completed"
 WORKSHOP_STATUS_CREATING = "creating"
 WORKSHOP_STATUS_FAILED = "failed"
 WORKSHOP_STATUS_SCHEDULED = "scheduled"
@@ -36,6 +37,25 @@ NO_TEMPLATE = "none"
 
 # Workshops starting within this window are provisioned immediately
 IMMEDIATE_PROVISION_THRESHOLD = timedelta(hours=1)
+
+
+def _strip_sensitive_participant_data(workshop: dict) -> dict:
+    """completed 전환 시 참가자 민감 데이터를 제거한다.
+
+    password, object_id 등 리소스 정리 후 불필요한 민감 정보를 삭제하여
+    아카이빙 데이터의 보안 위험을 최소화한다.
+
+    Args:
+        workshop: 워크샵 메타데이터 딕셔너리 (in-place 수정).
+
+    Returns:
+        민감 데이터가 제거된 워크샵 딕셔너리.
+    """
+    sensitive_fields = ("password", "object_id")
+    for participant in workshop.get("participants", []):
+        for field in sensitive_fields:
+            participant.pop(field, None)
+    return workshop
 
 
 class WorkshopService:
@@ -906,6 +926,13 @@ class WorkshopService:
         """
         metadata = await self.get_workshop_or_raise(workshop_id)
 
+        # Completed workshops are already cleaned up — no further deletion allowed
+        if metadata.get("status") == WORKSHOP_STATUS_COMPLETED:
+            return MessageResponse(
+                message="Workshop already completed",
+                detail="This workshop has already been cleaned up and archived.",
+            )
+
         # Scheduled workshops have no Azure resources — metadata-only deletion
         if metadata.get("status") == WORKSHOP_STATUS_SCHEDULED:
             try:
@@ -1067,9 +1094,11 @@ class WorkshopService:
                 workshop_id, e,
             )
 
-        await self.storage.delete_workshop_metadata(workshop_id)
+        _strip_sensitive_participant_data(metadata)
+        metadata["status"] = WORKSHOP_STATUS_COMPLETED
+        await self.storage.save_workshop_metadata(workshop_id, metadata)
 
-        logger.info("Workshop deleted: %s", workshop_id)
+        logger.info("Workshop completed: %s", workshop_id)
 
         return MessageResponse(
             message="Workshop deleted successfully",

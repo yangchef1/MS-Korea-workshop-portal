@@ -25,6 +25,8 @@ import {
   FolderX,
   ChevronDown,
   Cpu,
+  CheckCircle2,
+  Info,
 } from "lucide-react"
 
 import { workshopApi, type Participant, type AzureResource, type CostBreakdown, type DeletionFailure, type SubscriptionInfo } from "@/client"
@@ -833,6 +835,7 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
   }
 
   const isScheduled = workshop.status === "scheduled"
+  const isCompleted = workshop.status === "completed"
   const isExtendable = workshop.status === "active" || workshop.status === "scheduled"
 
   /**
@@ -865,6 +868,9 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
               <span
                 className={`px-2 py-1 rounded-full text-xs font-medium ${statusColors[workshop.status]}`}
               >
+                {isCompleted && (
+                  <CheckCircle2 className="inline h-3 w-3 mr-1" />
+                )}
                 {workshop.status}
               </span>
             </div>
@@ -872,7 +878,7 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
           </div>
         </div>
         <div className="flex gap-2">
-          {!isScheduled && (
+          {!isScheduled && !isCompleted && (
             <Button
               variant="outline"
               size="sm"
@@ -882,6 +888,7 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
               계정 정보 다운로드
             </Button>
           )}
+          {!isCompleted && (
           <AlertDialog>
             <AlertDialogTrigger asChild>
               <Button variant="destructive" size="sm" disabled={deleteMutation.isPending}>
@@ -909,8 +916,16 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
+          )}
         </div>
       </div>
+
+      {isCompleted && (
+        <div className="flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-800 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300">
+          <Info className="h-4 w-4 shrink-0" />
+          <span>이 워크샵은 종료되었으며 Azure 리소스가 정리되었습니다. 아카이브 데이터로 보존됩니다.</span>
+        </div>
+      )}
 
       <div className="grid gap-4 md:grid-cols-5">
         <Card className="flex items-center">

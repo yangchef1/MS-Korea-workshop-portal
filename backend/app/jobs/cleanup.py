@@ -220,12 +220,17 @@ async def _cleanup_single_workshop(workshop: dict) -> bool:
             logger.error("Failed to update workshop status: %s", e)
         return False
 
-    # Full success: delete metadata
+    # Full success: mark as completed and strip sensitive data
     try:
-        await storage_service.delete_workshop_metadata(workshop_id)
-        logger.info("Successfully cleaned up workshop '%s'", workshop_name)
+        sensitive_fields = ("password", "object_id")
+        for participant in participants:
+            for field in sensitive_fields:
+                participant.pop(field, None)
+        workshop["status"] = "completed"
+        await storage_service.save_workshop_metadata(workshop_id, workshop)
+        logger.info("Successfully cleaned up workshop '%s' — status set to completed", workshop_name)
     except Exception as e:
-        logger.error("Failed to delete workshop metadata: %s", e)
+        logger.error("Failed to update workshop status to completed: %s", e)
         return False
     return True
 
