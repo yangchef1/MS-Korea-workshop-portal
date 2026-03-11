@@ -1,13 +1,16 @@
 """Container App Job: 예약 워크샵 사전 프로비저닝.
 
 ACA Job에서 ``python -m app.jobs.provision``으로 실행된다.
-매시간 폴링하며 start_date - 1h <= now(UTC)인 scheduled 워크샵을 프로비저닝한다.
+매시간 폴링하며 start_date(KST) - 1h <= now(KST)인 scheduled 워크샵을 프로비저닝한다.
 """
 
 import asyncio
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
+
+# Workshop dates are stored as naive ISO strings in KST (UTC+9)
+_KST = timezone(timedelta(hours=9))
 
 from app.config import settings
 from app.services.storage import storage_service
@@ -26,13 +29,13 @@ logger = logging.getLogger(__name__)
 async def provision_scheduled_workshops() -> None:
     """Query all workshops and provision scheduled ones approaching start_date.
 
-    Provision criteria: status == 'scheduled' AND start_date - 1h <= now(UTC).
+    Provision criteria: status == 'scheduled' AND start_date(KST) - 1h <= now(KST).
     """
     run_id = str(uuid.uuid4())[:8]
     logger.info("Starting provision job (run_id=%s)", run_id)
 
     all_workshops = await storage_service.list_all_workshops()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(_KST)
 
     targets = []
     for ws in all_workshops:
@@ -45,10 +48,11 @@ async def provision_scheduled_workshops() -> None:
 
         try:
             start_dt = datetime.fromisoformat(
-                start_date_str.replace("Z", "+00:00")
+                start_date_str.replace("Z", "+09:00")
             )
+            # Naive datetimes from DB are KST
             if start_dt.tzinfo is None:
-                start_dt = start_dt.replace(tzinfo=timezone.utc)
+                start_dt = start_dt.replace(tzinfo=_KST)
 
             if start_dt - PROVISION_WINDOW <= now:
                 targets.append(ws)
