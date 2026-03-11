@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Optional
 
 from app.config import settings
-from app.exceptions import AppError, InvalidInputError, NotFoundError
+from app.exceptions import AppError, InvalidDateRangeError, InvalidInputError, NotFoundError
 from app.models import DeletionFailureItem, MessageResponse, WorkshopCreateInput, WorkshopDetail, WorkshopResponse
 from app.services.cost import cost_service
 from app.services.entra_id import entra_id_service
@@ -29,6 +29,8 @@ WORKSHOP_STATUS_ACTIVE = "active"
 WORKSHOP_STATUS_CREATING = "creating"
 WORKSHOP_STATUS_FAILED = "failed"
 WORKSHOP_STATUS_SCHEDULED = "scheduled"
+
+EXTENDABLE_STATUSES = {WORKSHOP_STATUS_ACTIVE, WORKSHOP_STATUS_SCHEDULED}
 DEFAULT_CURRENCY = "USD"
 NO_TEMPLATE = "none"
 
@@ -745,6 +747,97 @@ class WorkshopService:
                 workshop_id=workshop_id,
             )
             raise
+
+    async def extend_end_date(self, workshop_id: str, new_end_date: str) -> MessageResponse:
+        """워크샵의 종료 시간을 연장한다.
+
+        기존 end_date보다 뒤로만 연장할 수 있다. active 상태일 때는
+        참가자 리소스 그룹의 end_date 태그도 동기화한다 (best-effort).
+
+        Args:
+            workshop_id: 워크샵 고유 식별자.
+            new_end_date: 새 종료 날짜 (ISO 형식).
+
+        Returns:
+            성공 메시지.
+
+        Raises:
+            NotFoundError: 워크샵이 존재하지 않는 경우.
+            InvalidInputError: 워크샵 상태가 연장 불가능한 경우.
+            InvalidDateRangeError: 새 종료일이 기존 종료일 이전이거나 현재 시각 이전인 경우.
+            InsufficientSubscriptionsError: 연장 기간에 구독이 부족한 경우.
+        """
+        metadata = await self.get_workshop_or_raise(workshop_id)
+
+        status = metadata.get("status", "")
+        if status not in EXTENDABLE_STATUSES:
+            raise InvalidInputError(
+                f"Workshop '{workshop_id}' cannot be extended "
+                f"(current status: '{status}'). "
+                f"Only {EXTENDABLE_STATUSES} workshops can be extended."
+            )
+
+        current_end_date = metadata["end_date"]
+        current_end_dt = datetime.fromisoformat(current_end_date)
+        new_end_dt = datetime.fromisoformat(new_end_date)
+
+        if new_end_dt <= current_end_dt:
+            raise InvalidDateRangeError(
+                f"New end_date '{new_end_date}' must be after "
+                f"current end_date '{current_end_date}'"
+            )
+
+        now_utc = datetime.now(UTC)
+        # Ensure naive datetimes are treated as UTC for comparison
+        new_end_dt_aware = (
+            new_end_dt if new_end_dt.tzinfo else new_end_dt.replace(tzinfo=UTC)
+        )
+        if new_end_dt_aware <= now_utc:
+            raise InvalidDateRangeError(
+                f"New end_date '{new_end_date}' must be in the future"
+            )
+
+        # Check subscription availability for the extended period
+        participant_count = max(
+            len(metadata.get("participants", [])),
+            len(metadata.get("planned_participants", [])),
+        )
+        await self.subscription_service.check_temporal_availability(
+            metadata["start_date"],
+            new_end_date,
+            participant_count,
+            exclude_workshop_id=workshop_id,
+        )
+
+        # Update metadata
+        metadata["end_date"] = new_end_date
+        await self.storage.save_workshop_metadata(workshop_id, metadata)
+
+        logger.info(
+            "Extended workshop '%s' end_date: %s -> %s",
+            workshop_id, current_end_date, new_end_date,
+        )
+
+        # Sync RG tags for active workshops (best-effort)
+        if status == WORKSHOP_STATUS_ACTIVE:
+            participants = metadata.get("participants", [])
+            rg_specs = [
+                {
+                    "name": p.get("resource_group", ""),
+                    "subscription_id": p.get("subscription_id"),
+                }
+                for p in participants
+                if p.get("resource_group")
+            ]
+            if rg_specs:
+                await self.resource_mgr.update_resource_group_tags_bulk(
+                    rg_specs, {"end_date": new_end_date},
+                )
+
+        return MessageResponse(
+            message="Workshop end date extended successfully",
+            detail=f"{current_end_date} → {new_end_date}",
+        )
 
     async def provision_scheduled_workshop(self, workshop_id: str) -> WorkshopDetail:
         """예약된 워크샵을 프로비저닝한다.

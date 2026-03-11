@@ -49,6 +49,16 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
 import useCustomToast from "@/hooks/useCustomToast"
 import useAuth from "@/hooks/useAuth"
 import {
@@ -796,6 +806,22 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
     queryFn: () => workshopApi.getCost(workshopId),
   })
 
+  const [extendDialogOpen, setExtendDialogOpen] = useState(false)
+  const [newEndDate, setNewEndDate] = useState("")
+
+  const extendMutation = useMutation({
+    mutationFn: (newEnd: string) => workshopApi.extendEndDate(workshopId, newEnd),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["workshop", workshopId] })
+      showSuccessToast("종료 시간이 연장되었습니다")
+      setExtendDialogOpen(false)
+      setNewEndDate("")
+    },
+    onError: () => {
+      showErrorToast("종료 시간 연장에 실패했습니다")
+    },
+  })
+
   const statusColors: Record<string, string> = {
     active: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300",
     completed: "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300",
@@ -807,6 +833,20 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
   }
 
   const isScheduled = workshop.status === "scheduled"
+  const isExtendable = workshop.status === "active" || workshop.status === "scheduled"
+
+  /**
+   * Computes the minimum selectable datetime for the extend dialog.
+   * Takes the later of the current end_date and now, formatted for datetime-local input.
+   */
+  const minExtendDate = useMemo(() => {
+    const endDt = new Date(workshop.end_date)
+    const now = new Date()
+    const later = endDt > now ? endDt : now
+    // Add 1 minute so the min is strictly after the current end_date
+    later.setMinutes(later.getMinutes() + 1)
+    return later.toISOString().slice(0, 16)
+  }, [workshop.end_date])
 
   return (
     <div className="flex flex-col gap-6">
@@ -909,9 +949,52 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
         <Card className="flex items-center">
           <CardContent className="py-4 w-full">
             <div className="flex flex-col gap-2">
-              <div className="flex items-center gap-2 text-muted-foreground">
-                <Calendar className="h-4 w-4" />
-                <span className="text-sm">기간</span>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <Calendar className="h-4 w-4" />
+                  <span className="text-sm">기간</span>
+                </div>
+                {isExtendable && (
+                  <Dialog open={extendDialogOpen} onOpenChange={(open) => { setExtendDialogOpen(open); if (!open) setNewEndDate(""); }}>
+                    <DialogTrigger asChild>
+                      <Button variant="ghost" size="sm" className="h-6 px-2 text-xs">
+                        연장
+                      </Button>
+                    </DialogTrigger>
+                    <DialogContent>
+                      <DialogHeader>
+                        <DialogTitle>종료 시간 연장</DialogTitle>
+                        <DialogDescription>
+                          현재 종료: {new Date(workshop.end_date).toLocaleString('ko-KR')}
+                        </DialogDescription>
+                      </DialogHeader>
+                      <div className="py-4">
+                        <label htmlFor="new-end-date" className="text-sm font-medium">
+                          새 종료 시간
+                        </label>
+                        <Input
+                          id="new-end-date"
+                          type="datetime-local"
+                          min={minExtendDate}
+                          value={newEndDate}
+                          onChange={(e) => setNewEndDate(e.target.value)}
+                          className="mt-2"
+                        />
+                      </div>
+                      <DialogFooter>
+                        <DialogClose asChild>
+                          <Button variant="outline">취소</Button>
+                        </DialogClose>
+                        <Button
+                          onClick={() => extendMutation.mutate(newEndDate)}
+                          disabled={!newEndDate || extendMutation.isPending}
+                        >
+                          {extendMutation.isPending ? "연장 중..." : "연장"}
+                        </Button>
+                      </DialogFooter>
+                    </DialogContent>
+                  </Dialog>
+                )}
               </div>
               <div className="text-lg font-semibold leading-relaxed">
                 <p>{new Date(workshop.start_date).toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>

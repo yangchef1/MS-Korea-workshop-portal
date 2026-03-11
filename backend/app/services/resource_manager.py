@@ -164,6 +164,62 @@ class ResourceManagerService:
 
         return created_rgs
 
+    async def update_resource_group_tags(
+        self,
+        name: str,
+        tags: dict[str, str],
+        subscription_id: str | None = None,
+    ) -> None:
+        """리소스 그룹의 태그를 업데이트한다.
+
+        기존 태그를 유지하면서 지정된 태그만 덮어쓴다.
+
+        Args:
+            name: 리소스 그룹 이름.
+            tags: 업데이트할 태그 딕셔너리.
+            subscription_id: 대상 구독 ID. 미지정 시 기본 구독 사용.
+        """
+        try:
+            resource_client = self._get_resource_client(subscription_id)
+            rg = await resource_client.resource_groups.get(name)
+            merged_tags = {**(rg.tags or {}), **tags}
+            rg_params = ResourceGroup(location=rg.location, tags=merged_tags)
+            await resource_client.resource_groups.create_or_update(
+                resource_group_name=name,
+                parameters=rg_params,
+            )
+            logger.info(
+                "Updated tags for resource group '%s' (subscription: %s)",
+                name, subscription_id or "default",
+            )
+        except Exception as e:
+            logger.warning(
+                "Failed to update tags for resource group '%s': %s", name, e,
+            )
+
+    async def update_resource_group_tags_bulk(
+        self,
+        resource_groups: list[dict[str, Any]],
+        tags: dict[str, str],
+    ) -> None:
+        """여러 리소스 그룹의 태그를 병렬로 업데이트한다.
+
+        개별 실패는 경고 로그만 남기고 전체 작업을 중단하지 않는다.
+
+        Args:
+            resource_groups: name, subscription_id를 포함하는 딕셔너리 목록.
+            tags: 업데이트할 태그 딕셔너리.
+        """
+        tasks = [
+            self.update_resource_group_tags(
+                name=rg["name"],
+                tags=tags,
+                subscription_id=rg.get("subscription_id"),
+            )
+            for rg in resource_groups
+        ]
+        await asyncio.gather(*tasks, return_exceptions=True)
+
     async def delete_resource_group(
         self, name: str, subscription_id: str | None = None,
     ) -> bool:

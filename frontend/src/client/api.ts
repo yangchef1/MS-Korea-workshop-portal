@@ -586,6 +586,13 @@ export const workshopApi = {
     })
   },
 
+  /** 워크샵의 종료 시간을 연장한다. */
+  extendEndDate: async (id: string, newEndDate: string): Promise<void> => {
+    await apiClient.patch(`/workshops/${id}/end-date`, {
+      new_end_date: newEndDate,
+    })
+  },
+
   // sendSurvey removed: personal emails are no longer stored (compliance).
   // Survey links should be shared via Teams, chat, etc.
 

@@ -26,6 +26,7 @@ from app.models import (
     CostResponse,
     DeletionFailureItem,
     DeletionFailureListResponse,
+    EndDateExtension,
     MessageResponse,
     SurveyUrlUpdate,
     WorkshopDetail,
@@ -571,6 +572,21 @@ async def update_survey_url(
         message="Survey URL updated successfully",
         detail=body.survey_url,
     )
+
+
+@router.patch("/{workshop_id}/end-date", response_model=MessageResponse)
+async def extend_end_date(
+    workshop_id: str,
+    body: EndDateExtension,
+    workshop_service=Depends(get_workshop_service),
+    _: dict = Depends(require_admin),
+):
+    """워크샵의 종료 시간을 연장한다 (관리자 전용).
+
+    기존 end_date보다 뒤로만 연장할 수 있다.
+    active 상태일 때는 참가자 리소스 그룹의 end_date 태그도 동기화한다.
+    """
+    return await workshop_service.extend_end_date(workshop_id, body.new_end_date)
 
 
 # send-survey endpoint removed: personal emails are no longer stored
