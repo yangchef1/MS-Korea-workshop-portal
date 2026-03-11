@@ -55,3 +55,14 @@ jobs:
             --name ${{ env.CONTAINER_APP_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP }} \
             --image ${{ env.GHCR_IMAGE }}:${{ github.sha }}
+
+      - name: Update Container App Jobs
+        run: |
+          IMAGE=${{ env.GHCR_IMAGE }}:${{ github.sha }}
+          for JOB in job-workshop-cleanup-${{ inputs.environment }} job-workshop-provision-${{ inputs.environment }}; do
+            echo "Updating $JOB → $IMAGE"
+            az containerapp job update \
+              --name "$JOB" \
+              --resource-group ${{ env.RESOURCE_GROUP }} \
+              --image "$IMAGE"
+          done
