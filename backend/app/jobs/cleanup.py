@@ -2,13 +2,16 @@
 
 function/function_app.py의 timer-based cleanup을 async 버전으로 포팅.
 ACA Job에서 ``python -m app.jobs.cleanup``으로 실행된다.
-매시간 폴링하며 end_date + 1h < now(UTC)인 워크샵을 정리한다.
+매시간 폴링하며 end_date(KST) + 1h < now(KST)인 워크샵을 정리한다.
 """
 
 import asyncio
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
+
+# Workshop dates are stored as naive ISO strings in KST (UTC+9)
+_KST = timezone(timedelta(hours=9))
 
 from app.config import settings
 from app.models import DeletionFailureItem
@@ -32,7 +35,7 @@ logger = logging.getLogger(__name__)
 async def cleanup_expired_workshops() -> None:
     """Query all workshops and clean up expired ones.
 
-    Expiration criteria: end_date + 1h < now(UTC).
+    Expiration criteria: end_date(KST) + 1h < now(KST).
     Only workshops with status in CLEANABLE_STATUSES are processed.
     """
     run_id = str(uuid.uuid4())[:8]
@@ -40,9 +43,9 @@ async def cleanup_expired_workshops() -> None:
 
     # 1. Fetch all workshops from Table Storage
     all_workshops = await storage_service.list_all_workshops()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(_KST)
 
-    # 2. Filter expired workshops: end_date + 1h < now(UTC), status == 'active'
+    # 2. Filter expired workshops: end_date(KST) + 1h < now(KST), status == 'active'
     expired = []
     for ws in all_workshops:
         if ws.get("status", "active") not in CLEANABLE_STATUSES:
@@ -52,11 +55,11 @@ async def cleanup_expired_workshops() -> None:
             continue
         try:
             end_dt = datetime.fromisoformat(
-                end_date_str.replace("Z", "+00:00")
+                end_date_str.replace("Z", "+09:00")
             )
-            # Make naive datetimes UTC-aware for safe comparison
+            # Naive datetimes from DB are KST
             if end_dt.tzinfo is None:
-                end_dt = end_dt.replace(tzinfo=timezone.utc)
+                end_dt = end_dt.replace(tzinfo=_KST)
             if end_dt + timedelta(hours=1) < now:
                 expired.append(ws)
         except (ValueError, TypeError):
