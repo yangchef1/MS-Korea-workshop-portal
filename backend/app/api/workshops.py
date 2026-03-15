@@ -143,6 +143,7 @@ async def list_workshops(
 
 @router.get("/costs")
 async def get_workshops_costs(
+    _admin=Depends(require_admin),
     workshop_service=Depends(get_workshop_service),
 ):
     """모든 워크샵의 비용을 일괄 조회한다 (lazy-load용).
@@ -558,6 +559,7 @@ async def get_workshop_resources(
 async def get_workshop_cost(
     workshop_id: str,
     use_workshop_period: bool = True,
+    _admin=Depends(require_admin),
     storage=Depends(get_storage_service),
     cost=Depends(get_cost_service),
     workshop_service=Depends(get_workshop_service),

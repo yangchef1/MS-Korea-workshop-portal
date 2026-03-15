@@ -813,6 +813,8 @@ function DeletionFailuresTab({ workshopId }: { workshopId: string }) {
 
 function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
   const { data: workshop } = useSuspenseQuery(getWorkshopQueryOptions(workshopId))
+  const { user } = useAuth()
+  const isAdmin = user?.role === "admin"
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
   const invalidAliases = new Set(
@@ -840,6 +842,7 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
   const { refetch: refetchCost, isRefetching: isRefetchingCost } = useQuery({
     queryKey: ['workshop-cost', workshopId],
     queryFn: () => workshopApi.getCost(workshopId),
+    enabled: isAdmin,
   })
 
   const [extendDialogOpen, setExtendDialogOpen] = useState(false)
@@ -1085,7 +1088,7 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
         <TabsList>
           <TabsTrigger value="participants">참가자</TabsTrigger>
           <TabsTrigger value="resources">리소스</TabsTrigger>
-          <TabsTrigger value="costs">비용</TabsTrigger>
+          {isAdmin && <TabsTrigger value="costs">비용</TabsTrigger>}
           <TabsTrigger value="survey">설문</TabsTrigger>
           {workshop.status === "failed" && (
             <TabsTrigger value="deletion-failures" className="text-red-600 dark:text-red-400">
@@ -1167,19 +1170,21 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
           </Card>
         </TabsContent>
 
-        <TabsContent value="costs" className="mt-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>비용 분석</CardTitle>
-              <CardDescription>
-                워크샵 기간({new Date(workshop.start_date).toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })} ~ {new Date(workshop.end_date).toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })})의 비용 현황입니다
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <CostAnalysis workshopId={workshop.id} workshopStatus={workshop.status} participants={workshop.participants} refetch={refetchCost} isRefetching={isRefetchingCost} />
-            </CardContent>
-          </Card>
-        </TabsContent>
+        {isAdmin && (
+          <TabsContent value="costs" className="mt-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>비용 분석</CardTitle>
+                <CardDescription>
+                  워크샵 기간({new Date(workshop.start_date).toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })} ~ {new Date(workshop.end_date).toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })})의 비용 현황입니다
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <CostAnalysis workshopId={workshop.id} workshopStatus={workshop.status} participants={workshop.participants} refetch={refetchCost} isRefetching={isRefetchingCost} />
+              </CardContent>
+            </Card>
+          </TabsContent>
+        )}
 
         <TabsContent value="survey" className="mt-4">
           <SurveyTab workshopId={workshop.id} surveyUrl={workshop.survey_url} />
