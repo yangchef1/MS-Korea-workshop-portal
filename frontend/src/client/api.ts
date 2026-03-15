@@ -273,7 +273,7 @@ export interface Workshop {
   id: string
   name: string
   description?: string
-  status: "active" | "completed" | "creating" | "failed" | "deleted" | "scheduled"
+  status: "active" | "cleaning_up" | "completed" | "creating" | "failed" | "deleted" | "scheduled"
   region?: string
   deployment_region?: string
   policy?: {
@@ -311,6 +311,7 @@ export interface WorkshopResources {
   workshop_id: string
   total_count: number
   resources: AzureResource[]
+  is_snapshot?: boolean
 }
 
 export interface CostBreakdown {
@@ -326,6 +327,7 @@ export interface WorkshopCost {
   start_date?: string
   end_date?: string
   breakdown?: CostBreakdown[]
+  is_snapshot?: boolean
 }
 
 /** Infrastructure template type. */

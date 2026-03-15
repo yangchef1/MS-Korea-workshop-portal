@@ -1,4 +1,4 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router"
+import { createFileRoute } from "@tanstack/react-router"
 import { useSuspenseQuery, useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { Suspense, useMemo, useState } from "react"
 import { Link } from "@tanstack/react-router"
@@ -27,6 +27,7 @@ import {
   Cpu,
   CheckCircle2,
   Info,
+  Loader2,
 } from "lucide-react"
 
 import { workshopApi, type Participant, type AzureResource, type CostBreakdown, type DeletionFailure, type SubscriptionInfo } from "@/client"
@@ -69,10 +70,18 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
 
+/** Poll interval when workshop is being cleaned up. */
+const CLEANING_UP_POLL_INTERVAL_MS = 5000
+
 function getWorkshopQueryOptions(workshopId: string) {
   return {
     queryFn: () => workshopApi.get(workshopId),
     queryKey: ["workshop", workshopId],
+    refetchInterval: (query: { state: { data?: { status?: string } } }) => {
+      return query.state.data?.status === "cleaning_up"
+        ? CLEANING_UP_POLL_INTERVAL_MS
+        : false
+    },
   }
 }
 
@@ -273,10 +282,13 @@ function VmSkuPolicyCard({ policy }: { policy?: { allowed_vm_skus?: string[]; vm
   )
 }
 
-function ResourcesList({ workshopId, refetch, isRefetching }: { workshopId: string; refetch: () => void; isRefetching: boolean }) {
+function ResourcesList({ workshopId, workshopStatus, refetch, isRefetching }: { workshopId: string; workshopStatus?: string; refetch: () => void; isRefetching: boolean }) {
+  const isCleaningUp = workshopStatus === "cleaning_up"
+  const isCompleted = workshopStatus === "completed"
   const { data, isLoading } = useQuery({
     queryKey: ['workshop-resources', workshopId],
     queryFn: () => workshopApi.getResources(workshopId),
+    refetchInterval: isCleaningUp ? 10000 : false,
   })
 
   const COLLAPSE_THRESHOLD = 5
@@ -309,10 +321,23 @@ function ResourcesList({ workshopId, refetch, isRefetching }: { workshopId: stri
 
   return (
     <div className="space-y-3">
+      {isCleaningUp && (
+        <div className="flex items-center gap-2 rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-sm text-orange-800 dark:border-orange-800 dark:bg-orange-950 dark:text-orange-300">
+          <Loader2 className="h-4 w-4 animate-spin shrink-0" />
+          <span>리소스 정리가 진행 중입니다. 자동으로 업데이트됩니다.</span>
+        </div>
+      )}
+      {isCompleted && data?.is_snapshot && (
+        <div className="flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-600 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-400">
+          <Info className="h-4 w-4 shrink-0" />
+          <span>아카이브된 리소스 정보입니다</span>
+        </div>
+      )}
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">
           총 {data?.total_count || 0}개의 리소스 · {participantCount}명의 참가자
         </p>
+        {!isCompleted && (
         <Button
           variant="ghost"
           size="sm"
@@ -322,6 +347,7 @@ function ResourcesList({ workshopId, refetch, isRefetching }: { workshopId: stri
           <RefreshCw className={`h-4 w-4 mr-1 ${isRefetching ? 'animate-spin' : ''}`} />
           새로고침
         </Button>
+        )}
       </div>
       {data?.resources && data.resources.length > 0 ? (
         <div className="space-y-3">
@@ -397,7 +423,8 @@ function CostBreakdownRow({ item, alias }: { item: CostBreakdown; alias?: string
   )
 }
 
-function CostAnalysis({ workshopId, participants, refetch, isRefetching }: { workshopId: string; participants?: Participant[]; refetch: () => void; isRefetching: boolean }) {
+function CostAnalysis({ workshopId, workshopStatus, participants, refetch, isRefetching }: { workshopId: string; workshopStatus?: string; participants?: Participant[]; refetch: () => void; isRefetching: boolean }) {
+  const isCompleted = workshopStatus === "completed"
   const subscriptionToAlias = useMemo(() => {
     const map = new Map<string, string>()
     participants?.forEach((p) => {
@@ -423,6 +450,12 @@ function CostAnalysis({ workshopId, participants, refetch, isRefetching }: { wor
 
   return (
     <div className="space-y-6">
+      {isCompleted && data?.is_snapshot && (
+        <div className="flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-600 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-400">
+          <Info className="h-4 w-4 shrink-0" />
+          <span>아카이브된 비용 정보입니다</span>
+        </div>
+      )}
       {/* 비용 요약 */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -433,6 +466,7 @@ function CostAnalysis({ workshopId, participants, refetch, isRefetching }: { wor
             {data?.total_cost?.toFixed(2) || '0.00'}
           </span>
         </div>
+        {!isCompleted && (
         <Button
           variant="ghost"
           size="sm"
@@ -442,6 +476,7 @@ function CostAnalysis({ workshopId, participants, refetch, isRefetching }: { wor
           <RefreshCw className={`h-4 w-4 mr-1 ${isRefetching ? 'animate-spin' : ''}`} />
           새로고침
         </Button>
+        )}
       </div>
 
       {/* 참가자별 비용 상세 */}
@@ -778,7 +813,6 @@ function DeletionFailuresTab({ workshopId }: { workshopId: string }) {
 
 function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
   const { data: workshop } = useSuspenseQuery(getWorkshopQueryOptions(workshopId))
-  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
   const invalidAliases = new Set(
@@ -789,8 +823,8 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
     mutationFn: () => workshopApi.delete(workshopId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["workshops"] })
-      showSuccessToast("워크샵이 삭제되었습니다")
-      navigate({ to: "/" })
+      queryClient.invalidateQueries({ queryKey: ["workshop", workshopId] })
+      showSuccessToast("워크샵 정리가 시작되었습니다")
     },
     onError: () => {
       showErrorToast("워크샵 삭제에 실패했습니다")
@@ -828,6 +862,8 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
     active: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300",
     completed: "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300",
     creating: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300",
+    cleaning_up:
+      "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-300",
     scheduled:
       "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-300",
     failed: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300",
@@ -836,6 +872,7 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
 
   const isScheduled = workshop.status === "scheduled"
   const isCompleted = workshop.status === "completed"
+  const isCleaningUp = workshop.status === "cleaning_up"
   const isExtendable = workshop.status === "active" || workshop.status === "scheduled"
 
   /**
@@ -871,6 +908,9 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
                 {isCompleted && (
                   <CheckCircle2 className="inline h-3 w-3 mr-1" />
                 )}
+                {isCleaningUp && (
+                  <Loader2 className="inline h-3 w-3 mr-1 animate-spin" />
+                )}
                 {workshop.status}
               </span>
             </div>
@@ -878,7 +918,7 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
           </div>
         </div>
         <div className="flex gap-2">
-          {!isScheduled && !isCompleted && (
+          {!isScheduled && !isCompleted && !isCleaningUp && (
             <Button
               variant="outline"
               size="sm"
@@ -888,7 +928,7 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
               계정 정보 다운로드
             </Button>
           )}
-          {!isCompleted && (
+          {!isCompleted && !isCleaningUp && (
           <AlertDialog>
             <AlertDialogTrigger asChild>
               <Button variant="destructive" size="sm" disabled={deleteMutation.isPending}>
@@ -920,10 +960,17 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
         </div>
       </div>
 
+      {isCleaningUp && (
+        <div className="flex items-center gap-2 rounded-lg border border-orange-200 bg-orange-50 px-4 py-3 text-sm text-orange-800 dark:border-orange-800 dark:bg-orange-950 dark:text-orange-300">
+          <Loader2 className="h-4 w-4 animate-spin shrink-0" />
+          <span>Azure 리소스를 정리하고 있습니다... 리소스 탭에서 진행 상황을 확인할 수 있습니다.</span>
+        </div>
+      )}
+
       {isCompleted && (
         <div className="flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-800 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300">
           <Info className="h-4 w-4 shrink-0" />
-          <span>이 워크샵은 종료되었으며 Azure 리소스가 정리되었습니다. 아카이브 데이터로 보존됩니다.</span>
+          <span>이 워크샵은 종료되었으며 Azure 리소스가 정리되었습니다. 아래는 정리 전 아카이브된 데이터입니다.</span>
         </div>
       )}
 
@@ -1115,7 +1162,7 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <ResourcesList workshopId={workshop.id} refetch={refetchResources} isRefetching={isRefetchingResources} />
+              <ResourcesList workshopId={workshop.id} workshopStatus={workshop.status} refetch={refetchResources} isRefetching={isRefetchingResources} />
             </CardContent>
           </Card>
         </TabsContent>
@@ -1129,7 +1176,7 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <CostAnalysis workshopId={workshop.id} participants={workshop.participants} refetch={refetchCost} isRefetching={isRefetchingCost} />
+              <CostAnalysis workshopId={workshop.id} workshopStatus={workshop.status} participants={workshop.participants} refetch={refetchCost} isRefetching={isRefetchingCost} />
             </CardContent>
           </Card>
         </TabsContent>

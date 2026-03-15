@@ -1022,6 +1022,41 @@ class StorageService:
 
 
 # ------------------------------------------------------------------
+# Snapshot compression helpers (gzip + base64)
+# ------------------------------------------------------------------
+
+
+def _compress_json(data: dict | list | None) -> str:
+    """JSON 직렬화 후 gzip + base64 인코딩한다.
+
+    Azure Table Storage 64KB 프로퍼티 제한을 준수하기 위해 압축한다.
+    data가 None이면 빈 문자열을 반환한다.
+    """
+    if data is None:
+        return ""
+    raw = json.dumps(data, default=str, separators=(",", ":")).encode("utf-8")
+    return base64.b64encode(gzip.compress(raw)).decode("ascii")
+
+
+def _decompress_json(encoded: str | None) -> dict | list | None:
+    """base64 + gzip 디코딩 후 JSON 파싱한다.
+
+    빈 문자열이나 None이면 None을 반환한다.
+    """
+    if not encoded:
+        return None
+    try:
+        raw = gzip.decompress(base64.b64decode(encoded))
+        return json.loads(raw)
+    except Exception:
+        # Fall back: try plain JSON (migration compat)
+        try:
+            return json.loads(encoded)
+        except Exception:
+            return None
+
+
+# ------------------------------------------------------------------
 # Entity ↔ Dict conversion helpers
 # ------------------------------------------------------------------
 
@@ -1053,6 +1088,9 @@ def _workshop_to_entity(workshop_id: str, metadata: dict[str, Any]) -> dict[str,
             metadata.get("planned_participants", []), default=str
         ),
         "policy_json": json.dumps(metadata.get("policy", {}), default=str),
+        # Snapshot fields (compressed to stay within 64KB Table Storage limit)
+        "cost_snapshot_json": _compress_json(metadata.get("cost_snapshot")),
+        "resource_snapshot_json": _compress_json(metadata.get("resource_snapshot")),
     }
 
 
@@ -1073,6 +1111,8 @@ def _entity_to_workshop(entity: dict[str, Any]) -> dict[str, Any]:
         "participants": json.loads(entity.get("participants_json", "[]")),
         "planned_participants": json.loads(entity.get("planned_participants_json", "[]")),
         "policy": json.loads(entity.get("policy_json", "{}")),
+        "cost_snapshot": _decompress_json(entity.get("cost_snapshot_json", "")),
+        "resource_snapshot": _decompress_json(entity.get("resource_snapshot_json", "")),
     }
 
 
