@@ -118,12 +118,27 @@ async def _mark_workshop_failed(
 ) -> None:
     """Mark a workshop as failed after provisioning failure.
 
-    The workshop's _execute_provisioning already handles rollback internally,
-    so this only updates the metadata status.
+    The workshop's _execute_provisioning already handles rollback internally
+    (including metadata deletion). This method re-fetches the current state
+    from storage to avoid overwriting with stale data. If metadata was already
+    removed during rollback, the workshop is left deleted — no phantom
+    "failed" record is re-created from the stale snapshot.
     """
     try:
-        workshop["status"] = "failed"
-        await storage_service.save_workshop_metadata(workshop_id, workshop)
+        current = await storage_service.get_workshop_metadata(workshop_id)
+        if current is None:
+            # Metadata was cleaned up during rollback — do not re-create
+            # from the stale pre-provisioning snapshot.
+            logger.info(
+                "Workshop %s metadata already removed during rollback; "
+                "skipping failed status update. Error was: %s",
+                workshop_id,
+                error_message[:200],
+            )
+            return
+
+        current["status"] = "failed"
+        await storage_service.save_workshop_metadata(workshop_id, current)
         logger.warning(
             "Workshop %s marked as failed: %s",
             workshop_id,

@@ -16,6 +16,7 @@ import uuid
 from functools import lru_cache
 from typing import Any
 
+from azure.core.exceptions import ResourceNotFoundError
 from azure.mgmt.authorization.aio import AuthorizationManagementClient
 from azure.mgmt.authorization.models import RoleAssignmentCreateParameters
 from azure.mgmt.resource.resources.aio import ResourceManagementClient
@@ -225,6 +226,8 @@ class ResourceManagerService:
     ) -> bool:
         """리소스 그룹 삭제를 시작한다(비동기 작업).
 
+        이미 삭제되었거나 존재하지 않는 리소스 그룹은 성공으로 처리한다.
+
         Args:
             name: 리소스 그룹 이름.
             subscription_id: 대상 구독 ID. 미지정 시 기본 구독 사용.
@@ -241,6 +244,14 @@ class ResourceManagerService:
             )
             return True
 
+        except ResourceNotFoundError:
+            # Already deleted or never existed — treat as success
+            logger.info(
+                "Resource group %s not found (already deleted), treating as success",
+                name,
+            )
+            return True
+
         except Exception as e:
             logger.error("Failed to delete resource group %s: %s", name, e)
             raise
@@ -249,6 +260,10 @@ class ResourceManagerService:
         self, resource_groups: list[dict[str, Any]],
     ) -> dict[str, bool]:
         """여러 리소스 그룹을 병렬로 삭제한다.
+
+        삭제 API가 일시적 오류를 반환하더라도 실제로는 Azure가 비동기적으로
+        삭제를 완료하는 경우가 있다. 이를 방지하기 위해 실패로 보고된
+        리소스 그룹의 존재 여부를 재확인한 후 최종 상태를 결정한다.
 
         Args:
             resource_groups: name과 선택적 subscription_id를 포함하는 딕셔너리 목록.
@@ -277,7 +292,56 @@ class ResourceManagerService:
             else:
                 status[name] = result
 
+        # Verify that "failed" RGs actually still exist.
+        # Azure may complete deletion asynchronously even when the initial
+        # API call reported an error (e.g. transient 5xx, timeout).
+        failed_rgs = [
+            rg for rg in resource_groups
+            if not status.get(rg['name'], False)
+        ]
+        if failed_rgs:
+            await asyncio.sleep(5)
+            verify_tasks = [
+                self._resource_group_exists(
+                    rg['name'], rg.get('subscription_id'),
+                )
+                for rg in failed_rgs
+            ]
+            verify_results = await asyncio.gather(
+                *verify_tasks, return_exceptions=True,
+            )
+            for rg, exists in zip(failed_rgs, verify_results):
+                if isinstance(exists, bool) and not exists:
+                    logger.info(
+                        "Resource group %s verified as deleted "
+                        "(initial delete reported failure)",
+                        rg['name'],
+                    )
+                    status[rg['name']] = True
+
         return status
+
+    async def _resource_group_exists(
+        self, name: str, subscription_id: str | None = None,
+    ) -> bool:
+        """리소스 그룹이 존재하는지 확인한다.
+
+        Args:
+            name: 리소스 그룹 이름.
+            subscription_id: 대상 구독 ID.
+
+        Returns:
+            존재하면 True, 없으면 False.
+        """
+        try:
+            resource_client = self._get_resource_client(subscription_id)
+            await resource_client.resource_groups.get(name)
+            return True
+        except ResourceNotFoundError:
+            return False
+        except Exception:
+            # Cannot determine — assume it still exists to be safe
+            return True
 
     async def assign_rbac_role(
         self,
