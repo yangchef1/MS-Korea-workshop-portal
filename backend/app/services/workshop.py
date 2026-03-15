@@ -26,6 +26,7 @@ WORKSHOP_DENIED_RESOURCES_ASSIGNMENT = "workshop-denied-resources"
 WORKSHOP_ALLOWED_VM_SKUS_ASSIGNMENT = "workshop-allowed-vm-skus"
 
 WORKSHOP_STATUS_ACTIVE = "active"
+WORKSHOP_STATUS_CLEANING_UP = "cleaning_up"
 WORKSHOP_STATUS_COMPLETED = "completed"
 WORKSHOP_STATUS_CREATING = "creating"
 WORKSHOP_STATUS_FAILED = "failed"
@@ -59,6 +60,84 @@ def _strip_sensitive_participant_data(workshop: dict) -> dict:
         for field in sensitive_fields:
             participant.pop(field, None)
     return workshop
+
+
+async def _capture_workshop_snapshot(
+    participants: list[dict],
+    cost_svc,
+    resource_mgr,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> dict[str, Any]:
+    """cleanup 직전 비용·리소스 스냅샷을 캡처한다.
+
+    스냅샷 실패가 cleanup 자체를 막아서는 안 되므로,
+    각 단계에서 예외를 삼킨다.
+
+    Args:
+        participants: 워크샵 참가자 목록.
+        cost_svc: CostService 인스턴스.
+        resource_mgr: ResourceManagerService 인스턴스.
+        start_date: 워크샵 시작일 (비용 기간).
+        end_date: 워크샵 종료일 (비용 기간).
+
+    Returns:
+        {"cost_snapshot": dict|None, "resource_snapshot": dict|None}
+    """
+    cost_snapshot = None
+    resource_snapshot = None
+
+    # Build cost specs (subscription-level)
+    cost_specs = [
+        {"subscription_id": p.get("subscription_id")}
+        for p in participants
+        if p.get("subscription_id")
+    ]
+
+    async def _capture_cost() -> dict | None:
+        try:
+            return await cost_svc.get_workshop_total_cost(
+                cost_specs, start_date=start_date, end_date=end_date,
+            )
+        except Exception as exc:
+            logger.warning("Failed to capture cost snapshot: %s", exc)
+            return None
+
+    async def _capture_resources() -> dict | None:
+        try:
+            all_resources: list[dict] = []
+            for p in participants:
+                rg_name = p.get("resource_group")
+                sub_id = p.get("subscription_id")
+                if not rg_name:
+                    continue
+                resources = await resource_mgr.list_resources_in_group(
+                    rg_name, subscription_id=sub_id,
+                )
+                for r in resources:
+                    all_resources.append({
+                        "name": r.get("name", ""),
+                        "type": r.get("type", ""),
+                        "location": r.get("location", ""),
+                        "participant": p.get("alias", ""),
+                        "resource_group": rg_name,
+                    })
+            return {
+                "total_count": len(all_resources),
+                "resources": all_resources,
+            }
+        except Exception as exc:
+            logger.warning("Failed to capture resource snapshot: %s", exc)
+            return None
+
+    cost_snapshot, resource_snapshot = await asyncio.gather(
+        _capture_cost(), _capture_resources(),
+    )
+
+    return {
+        "cost_snapshot": cost_snapshot,
+        "resource_snapshot": resource_snapshot,
+    }
 
 
 class WorkshopService:
@@ -924,9 +1003,11 @@ class WorkshopService:
         )
 
     async def delete_workshop(self, workshop_id: str) -> MessageResponse:
-        """워크샵과 관련 리소스를 모두 삭제한다 (구독별 지원).
+        """워크샵 정리를 시작한다 — 스냅샷 캡처 후 cleaning_up 상태로 전환.
 
         scheduled 상태인 워크샵은 리소스가 없으므로 메타데이터만 삭제한다.
+        active/failed 워크샵은 cleaning_up으로 전환 후 즉시 반환한다.
+        실제 리소스 삭제는 execute_cleanup()에서 수행된다.
         """
         metadata = await self.get_workshop_or_raise(workshop_id)
 
@@ -935,6 +1016,13 @@ class WorkshopService:
             return MessageResponse(
                 message="Workshop already completed",
                 detail="This workshop has already been cleaned up and archived.",
+            )
+
+        # Already cleaning up — idempotent
+        if metadata.get("status") == WORKSHOP_STATUS_CLEANING_UP:
+            return MessageResponse(
+                message="Workshop cleanup already in progress",
+                detail="Resource cleanup is currently running.",
             )
 
         # Scheduled workshops have no Azure resources — metadata-only deletion
@@ -961,19 +1049,50 @@ class WorkshopService:
                 detail=f"Removed scheduled workshop with {planned_count} planned participants",
             )
 
+        # Phase 1: Capture snapshots and transition to cleaning_up
+        participants = metadata.get("participants", [])
+        snapshots = await _capture_workshop_snapshot(
+            participants,
+            self.cost,
+            self.resource_mgr,
+            start_date=metadata.get("start_date"),
+            end_date=metadata.get("end_date"),
+        )
+
+        metadata["cost_snapshot"] = snapshots["cost_snapshot"]
+        metadata["resource_snapshot"] = snapshots["resource_snapshot"]
+        metadata["status"] = WORKSHOP_STATUS_CLEANING_UP
+        await self.storage.save_workshop_metadata(workshop_id, metadata)
+
+        logger.info(
+            "Workshop %s transitioned to cleaning_up (snapshot captured)",
+            workshop_id,
+        )
+
+        return MessageResponse(
+            message="Workshop cleanup started",
+            detail="Snapshots captured. Resource cleanup is in progress.",
+        )
+
+    async def execute_cleanup(self, workshop_id: str) -> None:
+        """cleaning_up 상태 워크샵의 실제 리소스 삭제를 수행한다.
+
+        BackgroundTasks에서 호출된다. 성공 시 completed, 실패 시 failed로 전환.
+        """
+        metadata = await self.storage.get_workshop_metadata(workshop_id)
+        if not metadata:
+            logger.error("Workshop %s not found during cleanup execution", workshop_id)
+            return
+
         participants = metadata.get("participants", [])
         workshop_name = metadata.get("name", "")
 
         rg_specs = []
-        subscription_ids_to_release: list[str] = []
-
         for participant in participants:
             subscription_id = participant.get("subscription_id")
             rg_name = participant.get("resource_group")
 
             if subscription_id:
-                subscription_ids_to_release.append(subscription_id)
-
                 sub_scope = f"/subscriptions/{subscription_id}"
                 for assignment_name in (
                     WORKSHOP_ALLOWED_LOCATIONS_ASSIGNMENT,
@@ -1059,7 +1178,6 @@ class WorkshopService:
             await self.storage.save_workshop_metadata(workshop_id, metadata)
 
             try:
-                # workshop_id 역조회로 해제 — 참가자 목록 불일치·고아 alloc도 함께 처리
                 released = await self.storage.release_subscriptions_by_workshop(workshop_id)
                 logger.info(
                     "Released %d subscription(s) during partial delete of workshop %s",
@@ -1076,17 +1194,9 @@ class WorkshopService:
                 workshop_id,
                 len(failures),
             )
-
-            return MessageResponse(
-                message="Workshop deletion partially failed",
-                detail=(
-                    f"{len(failures)} resource(s) failed to delete. "
-                    "Check the deletion failures tab for details."
-                ),
-            )
+            return
 
         try:
-            # workshop_id 역조회로 해제 — 참가자 목록과 in_use_map 불일치도 커버
             released = await self.storage.release_subscriptions_by_workshop(workshop_id)
             logger.info(
                 "Released %d subscription(s) for workshop %s",
@@ -1103,11 +1213,6 @@ class WorkshopService:
         await self.storage.save_workshop_metadata(workshop_id, metadata)
 
         logger.info("Workshop completed: %s", workshop_id)
-
-        return MessageResponse(
-            message="Workshop deleted successfully",
-            detail=f"Deleted {len(participants)} participants and their resources",
-        )
 
 
 workshop_service = WorkshopService()

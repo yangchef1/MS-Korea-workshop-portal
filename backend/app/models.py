@@ -135,7 +135,7 @@ class PolicyData(BaseModel):
     vm_sku_preset: Optional[str] = None
 
 
-WORKSHOP_VALID_STATUSES = {"active", "completed", "creating", "deleted", "failed", "scheduled"}
+WORKSHOP_VALID_STATUSES = {"active", "cleaning_up", "completed", "creating", "deleted", "failed", "scheduled"}
 
 
 class WorkshopCreateInput(BaseModel):
@@ -179,6 +179,8 @@ class WorkshopMetadata(BaseModel):
     created_by: Optional[str] = None
     description: Optional[str] = None
     survey_url: Optional[str] = None
+    cost_snapshot: Optional[dict] = None
+    resource_snapshot: Optional[dict] = None
 
     @field_validator("status")
     @classmethod

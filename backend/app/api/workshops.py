@@ -6,7 +6,7 @@
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
 
@@ -254,18 +254,23 @@ async def create_workshop(
     )
 
 
-@router.delete("/{workshop_id}", response_model=MessageResponse)
+@router.delete("/{workshop_id}", response_model=MessageResponse, status_code=202)
 async def delete_workshop(
     workshop_id: str,
+    background_tasks: BackgroundTasks,
     workshop_service=Depends(get_workshop_service),
 ):
-    """워크샵과 관련 리소스를 모두 삭제한다 (구독별 지원).
+    """워크샵 정리를 시작한다 (비동기, 202 Accepted).
 
-    참가자별 구독 내 모든 리소스를 삭제하고, 구독 레벨 Policy/RBAC를
-    제거한 뒤, 구독 사용 추적을 해제한다.
-    삭제 실패 항목이 있으면 status를 'failed'로 변경하고 메타데이터를 유지한다.
+    스냅샷을 캡처하고 cleaning_up 상태로 전환한 뒤 즉시 반환한다.
+    실제 리소스 삭제는 백그라운드에서 수행된다.
+    scheduled 워크샵은 즉시 삭제된다.
     """
-    return await workshop_service.delete_workshop(workshop_id)
+    result = await workshop_service.delete_workshop(workshop_id)
+    # If the workshop was transitioned to cleaning_up, run actual cleanup in background
+    if result.message == "Workshop cleanup started":
+        background_tasks.add_task(workshop_service.execute_cleanup, workshop_id)
+    return result
 
 
 # ------------------------------------------------------------------
@@ -507,8 +512,23 @@ async def get_workshop_resources(
     storage=Depends(get_storage_service),
     resource_mgr=Depends(get_resource_manager_service),
 ):
-    """워크샵 리소스 그룹 내 모든 리소스를 조회한다 (구독별 지원)."""
+    """워크샵 리소스를 조회한다.
+
+    completed 상태에서는 아카이브된 스냅샷 데이터를 반환한다.
+    cleaning_up/active 상태에서는 Azure API를 실시간 조회한다.
+    """
     metadata = await _get_workshop_or_raise(storage, workshop_id)
+
+    # Return archived snapshot for completed workshops
+    if metadata.get("status") == "completed" and metadata.get("resource_snapshot"):
+        snapshot = metadata["resource_snapshot"]
+        return {
+            "workshop_id": workshop_id,
+            "total_count": snapshot.get("total_count", 0),
+            "resources": snapshot.get("resources", []),
+            "is_snapshot": True,
+        }
+
     participants = metadata.get("participants", [])
     all_resources = []
 
@@ -542,8 +562,25 @@ async def get_workshop_cost(
     cost=Depends(get_cost_service),
     workshop_service=Depends(get_workshop_service),
 ):
-    """워크샵 기간 기반 비용 상세를 조회한다 (구독별 지원)."""
+    """워크샵 비용을 조회한다.
+
+    completed 상태에서는 아카이브된 스냅샷 데이터를 반환한다.
+    cleaning_up/active 상태에서는 Azure Cost Management API를 실시간 조회한다.
+    """
     metadata = await _get_workshop_or_raise(storage, workshop_id)
+
+    # Return archived snapshot for completed workshops
+    if metadata.get("status") == "completed" and metadata.get("cost_snapshot"):
+        snapshot = metadata["cost_snapshot"]
+        return CostResponse(
+            total_cost=snapshot.get("total_cost", 0.0),
+            currency=snapshot.get("currency", "USD"),
+            period_days=snapshot.get("period_days", 0),
+            start_date=snapshot.get("start_date"),
+            end_date=snapshot.get("end_date"),
+            breakdown=snapshot.get("breakdown"),
+        )
+
     cost_specs = workshop_service.build_cost_specs(metadata.get("participants", []))
 
     if use_workshop_period:

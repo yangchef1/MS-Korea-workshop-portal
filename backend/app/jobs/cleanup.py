@@ -15,6 +15,7 @@ _KST = timezone(timedelta(hours=9))
 
 from app.config import settings
 from app.models import DeletionFailureItem
+from app.services.cost import cost_service
 from app.services.entra_id import entra_id_service
 from app.services.policy import policy_service
 from app.services.resource_manager import resource_manager_service
@@ -26,8 +27,8 @@ WORKSHOP_ALLOWED_LOCATIONS_ASSIGNMENT = "workshop-allowed-locations"
 WORKSHOP_DENIED_RESOURCES_ASSIGNMENT = "workshop-denied-resources"
 WORKSHOP_ALLOWED_VM_SKUS_ASSIGNMENT = "workshop-allowed-vm-skus"
 
-# Only clean up workshops in 'active' status (idempotency guard)
-CLEANABLE_STATUSES = {"active"}
+# Also resume workshops stuck in 'cleaning_up' (e.g. after crash)
+CLEANABLE_STATUSES = {"active", "cleaning_up"}
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +127,22 @@ async def _cleanup_single_workshop(workshop: dict) -> bool:
         workshop_id,
         len(participants),
     )
+
+    # Pre-step: Capture snapshots and transition to cleaning_up (skip if already cleaning_up)
+    if workshop.get("status") != "cleaning_up":
+        from app.services.workshop import _capture_workshop_snapshot
+        snapshots = await _capture_workshop_snapshot(
+            participants,
+            cost_service,
+            resource_manager_service,
+            start_date=workshop.get("start_date"),
+            end_date=workshop.get("end_date"),
+        )
+        workshop["cost_snapshot"] = snapshots["cost_snapshot"]
+        workshop["resource_snapshot"] = snapshots["resource_snapshot"]
+        workshop["status"] = "cleaning_up"
+        await storage_service.save_workshop_metadata(workshop_id, workshop)
+        logger.info("Workshop '%s' transitioned to cleaning_up (snapshot captured)", workshop_name)
 
     # Step 0: Remove policy assignments (per subscription)
     seen_subs: set[str] = set()

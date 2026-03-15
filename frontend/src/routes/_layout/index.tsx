@@ -30,7 +30,7 @@ import {
 } from "@/components/ui/card"
 import useAuth from "@/hooks/useAuth"
 
-/** Poll interval when any workshop is still being provisioned. */
+/** Poll interval when any workshop is being provisioned or cleaned up. */
 const CREATING_POLL_INTERVAL_MS = 5000
 
 function getWorkshopsQueryOptions() {
@@ -38,10 +38,10 @@ function getWorkshopsQueryOptions() {
     queryFn: () => workshopApi.list(),
     queryKey: ["workshops"],
     refetchInterval: (query: { state: { data?: Workshop[] } }) => {
-      const hasCreating = query.state.data?.some(
-        (w) => w.status === "creating"
+      const hasInProgress = query.state.data?.some(
+        (w) => w.status === "creating" || w.status === "cleaning_up"
       )
-      return hasCreating ? CREATING_POLL_INTERVAL_MS : false
+      return hasInProgress ? CREATING_POLL_INTERVAL_MS : false
     },
   }
 }
@@ -84,6 +84,8 @@ function WorkshopCard({ workshop }: { workshop: Workshop }) {
     active: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300",
     completed: "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300",
     creating: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300",
+    cleaning_up:
+      "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-300",
     scheduled:
       "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-300",
     failed: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300",
@@ -99,13 +101,16 @@ function WorkshopCard({ workshop }: { workshop: Workshop }) {
     })
 
   const isCreating = workshop.status === "creating"
+  const isCleaningUp = workshop.status === "cleaning_up"
 
   const card = (
     <Card
       className={`h-full flex flex-col transition-shadow ${
         isCreating
           ? "opacity-60 cursor-not-allowed"
-          : "hover:shadow-md cursor-pointer"
+          : isCleaningUp
+            ? "opacity-80 hover:shadow-md cursor-pointer"
+            : "hover:shadow-md cursor-pointer"
       }`}
     >
       <CardHeader className="flex-none pb-2">
@@ -118,6 +123,9 @@ function WorkshopCard({ workshop }: { workshop: Workshop }) {
               <AlertCircle className="inline h-3 w-3 mr-1" />
             )}
             {isCreating && (
+              <Loader2 className="inline h-3 w-3 mr-1 animate-spin" />
+            )}
+            {isCleaningUp && (
               <Loader2 className="inline h-3 w-3 mr-1 animate-spin" />
             )}
             {workshop.status === "scheduled" && (
@@ -195,11 +203,12 @@ function WorkshopsListContent() {
   // Sort: active statuses first (creating, active, scheduled, failed), then completed at the bottom
   const STATUS_ORDER: Record<string, number> = {
     creating: 0,
-    active: 1,
-    scheduled: 2,
-    failed: 3,
-    completed: 4,
-    deleted: 5,
+    cleaning_up: 1,
+    active: 2,
+    scheduled: 3,
+    failed: 4,
+    completed: 5,
+    deleted: 6,
   }
   const sorted = [...workshops].sort(
     (a, b) => (STATUS_ORDER[a.status] ?? 99) - (STATUS_ORDER[b.status] ?? 99)
