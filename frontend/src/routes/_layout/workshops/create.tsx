@@ -607,9 +607,9 @@ function CreateWorkshop() {
                   setParametersFile(null)
                 }}
               >
-                <TabsList className="w-full">
-                  <TabsTrigger value="preset" className="flex-1">사전 등록 선택</TabsTrigger>
-                  <TabsTrigger value="upload" className="flex-1">파일 업로드</TabsTrigger>
+                <TabsList>
+                  <TabsTrigger value="preset">사전 등록 선택</TabsTrigger>
+                  <TabsTrigger value="upload">파일 업로드</TabsTrigger>
                 </TabsList>
 
                 <TabsContent value="preset" className="space-y-2">

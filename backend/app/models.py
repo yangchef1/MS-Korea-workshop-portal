@@ -124,10 +124,16 @@ class InvalidParticipant(BaseModel):
 
 
 class PlannedParticipant(BaseModel):
-    """예약 워크샵에 저장되는 사전 참가자 데이터 (CSV 파싱 결과)."""
+    """예약 워크샵에 저장되는 사전 참가자 데이터.
 
-    email: str
+    생성 시 Entra ID 계정을 disabled 상태로 즉시 생성하고,
+    원본 이메일은 저장하지 않는다 (compliance).
+    """
+
     alias: str
+    upn: str
+    password: Optional[str] = None
+    object_id: Optional[str] = None
 
 
 class PolicyData(BaseModel):

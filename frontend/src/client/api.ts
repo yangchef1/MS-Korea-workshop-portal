@@ -266,7 +266,9 @@ export interface Participant {
 
 export interface PlannedParticipant {
   alias: string
-  email: string
+  upn: string
+  password?: string
+  object_id?: string
 }
 
 export interface Workshop {

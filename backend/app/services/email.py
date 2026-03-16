@@ -75,6 +75,7 @@ class EmailService:
             "password": participant.get("password", ""),
             "subscription_id": participant.get("subscription_id", ""),
             "resource_group": participant.get("resource_group", ""),
+            "account_activation_notice": participant.get("account_activation_notice", ""),
             # Optional branding / layout variables (Jinja2 default filters handle missing)
             "logo_url": participant.get("logo_url", ""),
             "logo_alt": participant.get("logo_alt", ""),

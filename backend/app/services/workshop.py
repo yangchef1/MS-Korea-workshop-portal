@@ -13,6 +13,7 @@ from app.config import settings
 from app.exceptions import AppError, InvalidDateRangeError, InvalidInputError, NotFoundError, PolicyNotFoundError
 from app.models import DeletionFailureItem, MessageResponse, WorkshopCreateInput, WorkshopDetail, WorkshopResponse
 from app.services.cost import cost_service
+from app.services.email import email_service
 from app.services.entra_id import entra_id_service
 from app.services.policy import policy_service
 from app.services.resource_manager import resource_manager_service
@@ -842,10 +843,12 @@ class WorkshopService:
         base_metadata: dict[str, Any],
         participants: list[dict[str, str]],
     ) -> WorkshopDetail:
-        """워크샵을 scheduled 상태로 저장한다.
+        """Entra ID 계정을 disabled 상태로 생성하고 예약 워크샵을 저장한다.
 
-        리소스를 프로비저닝하지 않고, 메타데이터만 저장하여
-        Provision Job이 start_date 1시간 전에 프로비저닝하도록 한다.
+        1. Entra ID 사용자를 account_enabled=False로 생성
+        2. 원본 이메일로 UPN+비밀번호 크레덴셜 이메일 발송
+        3. 원본 이메일은 저장하지 않음 (compliance)
+        4. Provision Job이 start_date 1시간 전에 계정을 enable하고 리소스 프로비저닝
 
         Args:
             workshop_id: 워크샵 고유 식별자.
@@ -855,43 +858,115 @@ class WorkshopService:
         Returns:
             scheduled 상태의 WorkshopDetail.
         """
-        planned_participants = [
-            {"alias": p["alias"], "email": p["email"]}
-            for p in participants
-        ]
+        created_users: list[dict] = []
 
-        metadata = {
-            **base_metadata,
-            "participants": [],
-            "planned_participants": planned_participants,
-            "status": WORKSHOP_STATUS_SCHEDULED,
-        }
-        await self.storage.save_workshop_metadata(workshop_id, metadata)
+        try:
+            # Step 1: Create Entra ID users with accountEnabled=false
+            user_results = await self.entra_id.create_users_bulk(
+                [p["alias"] for p in participants],
+                account_enabled=False,
+            )
+            if not user_results:
+                raise InvalidInputError("Failed to create any Entra ID users")
+            created_users = user_results
 
-        logger.info(
-            "Workshop '%s' scheduled with %d planned participants (start: %s)",
-            base_metadata["name"],
-            len(planned_participants),
-            base_metadata["start_date"],
-        )
+            # Step 2: Send credential emails using original email (in-memory only)
+            alias_to_email = {
+                p["alias"]: p["email"] for p in participants
+            }
+            workshop_name = base_metadata["name"]
 
-        return WorkshopDetail(
-            id=workshop_id,
-            name=base_metadata["name"],
-            start_date=base_metadata["start_date"],
-            end_date=base_metadata["end_date"],
-            participants=[],
-            planned_participants=planned_participants,
-            planned_participant_count=len(planned_participants),
-            base_resources_template=base_metadata.get("base_resources_template", ""),
-            deployment_region=base_metadata.get("deployment_region", ""),
-            policy=base_metadata.get("policy", {}),
-            status=WORKSHOP_STATUS_SCHEDULED,
-            created_at=base_metadata["created_at"],
-            total_cost=0.0,
-            currency=DEFAULT_CURRENCY,
-            survey_url=base_metadata.get("survey_url") or None,
-        )
+            for user in user_results:
+                original_email = alias_to_email.get(user["alias"])
+                if not original_email:
+                    logger.warning(
+                        "No original email found for alias '%s', skipping credential email",
+                        user["alias"],
+                    )
+                    continue
+
+                try:
+                    await email_service.send_credentials_email(
+                        participant={
+                            "alias": user["alias"],
+                            "email": original_email,
+                            "upn": user["upn"],
+                            "password": user["password"],
+                            "subscription_id": "",
+                            "resource_group": "",
+                            "account_activation_notice": base_metadata["start_date"],
+                        },
+                        workshop_name=workshop_name,
+                    )
+                except Exception as e:
+                    # Email failure is non-blocking
+                    logger.warning(
+                        "Failed to send credential email to %s for alias '%s': %s",
+                        original_email,
+                        user["alias"],
+                        e,
+                    )
+
+            # Step 3: Store planned participants WITHOUT original email
+            planned_participants = [
+                {
+                    "alias": user["alias"],
+                    "upn": user["upn"],
+                    "password": user["password"],
+                    "object_id": user["object_id"],
+                }
+                for user in user_results
+            ]
+
+            metadata = {
+                **base_metadata,
+                "participants": [],
+                "planned_participants": planned_participants,
+                "status": WORKSHOP_STATUS_SCHEDULED,
+            }
+            await self.storage.save_workshop_metadata(workshop_id, metadata)
+
+            logger.info(
+                "Workshop '%s' scheduled with %d disabled users created "
+                "(start: %s, emails sent)",
+                base_metadata["name"],
+                len(planned_participants),
+                base_metadata["start_date"],
+            )
+
+            return WorkshopDetail(
+                id=workshop_id,
+                name=base_metadata["name"],
+                start_date=base_metadata["start_date"],
+                end_date=base_metadata["end_date"],
+                participants=[],
+                planned_participants=planned_participants,
+                planned_participant_count=len(planned_participants),
+                base_resources_template=base_metadata.get("base_resources_template", ""),
+                deployment_region=base_metadata.get("deployment_region", ""),
+                policy=base_metadata.get("policy", {}),
+                status=WORKSHOP_STATUS_SCHEDULED,
+                created_at=base_metadata["created_at"],
+                total_cost=0.0,
+                currency=DEFAULT_CURRENCY,
+                survey_url=base_metadata.get("survey_url") or None,
+            )
+        except Exception:
+            # Rollback: delete any Entra ID users created so far
+            if created_users:
+                upns = [u["upn"] for u in created_users]
+                upn_to_oid = {
+                    u["upn"]: u["object_id"]
+                    for u in created_users
+                    if u.get("object_id")
+                }
+                logger.info(
+                    "Rolling back %d Entra ID users for scheduled workshop %s",
+                    len(upns),
+                    workshop_id,
+                )
+                await self.entra_id.delete_users_bulk(upns, upn_to_object_id=upn_to_oid)
+            raise
 
     async def _execute_provisioning(
         self,
@@ -899,6 +974,7 @@ class WorkshopService:
         base_metadata: dict[str, Any],
         participants: list[dict[str, str]],
         uploaded_template_dict: dict[str, Any] | None = None,
+        pre_created_users: list[dict] | None = None,
     ) -> WorkshopDetail:
         """Azure 리소스를 프로비저닝하여 워크샵을 활성화한다.
 
@@ -911,6 +987,8 @@ class WorkshopService:
             base_metadata: 공통 메타데이터 (id, name, dates, policy 등).
             participants: 참가자 목록 [{alias, email}].
             uploaded_template_dict: 업로드된 일회성 ARM 템플릿 dict.
+            pre_created_users: 이미 생성된 Entra ID 사용자 딕셔너리 리스트.
+                제공 시 사용자 생성을 생략하고 전달된 데이터를 사용한다.
 
         Returns:
             활성화된 WorkshopDetail.
@@ -966,9 +1044,13 @@ class WorkshopService:
                 len(participants),
             )
 
-            user_results = await self.entra_id.create_users_bulk(
-                [participant["alias"] for participant in participants]
-            )
+            # Use pre-created users (scheduled provisioning) or create new ones
+            if pre_created_users:
+                user_results = pre_created_users
+            else:
+                user_results = await self.entra_id.create_users_bulk(
+                    [participant["alias"] for participant in participants]
+                )
             if not user_results:
                 raise InvalidInputError("Failed to create any Entra ID users")
             created_users = user_results
@@ -1186,7 +1268,10 @@ class WorkshopService:
         """예약된 워크샵을 프로비저닝한다.
 
         Provision Job이 호출한다. scheduled 상태인 워크샵의 planned_participants를
-        기반으로 Azure 리소스를 프로비저닝하고 active 상태로 전환한다.
+        기반으로 Entra ID 계정을 enable하고 Azure 리소스를 프로비저닝한다.
+
+        planned_participants에는 이미 disabled 상태로 생성된 Entra ID 사용자의
+        alias, upn, password, object_id가 저장되어 있다.
 
         Args:
             workshop_id: 프로비저닝할 워크샵 ID.
@@ -1212,10 +1297,32 @@ class WorkshopService:
                 f"Workshop '{workshop_id}' has no planned participants"
             )
 
-        participants = [
-            {"alias": p["alias"], "email": p["email"]}
+        # Step 1: Enable all pre-created Entra ID accounts
+        object_ids = [p["object_id"] for p in planned if p.get("object_id")]
+        if object_ids:
+            enabled = await self.entra_id.enable_users_bulk(object_ids)
+            logger.info(
+                "Enabled %d/%d Entra ID users for workshop %s",
+                len(enabled),
+                len(object_ids),
+                workshop_id,
+            )
+
+        # Step 2: Build pre_created_users for _execute_provisioning
+        # These users already exist in Entra ID, so creation will be skipped
+        pre_created_users = [
+            {
+                "alias": p["alias"],
+                "upn": p["upn"],
+                "password": p.get("password", ""),
+                "object_id": p.get("object_id", ""),
+                "display_name": f"Workshop User {p['alias']}",
+            }
             for p in planned
         ]
+
+        # Build participants list with alias for subscription assignment
+        participants = [{"alias": p["alias"]} for p in planned]
 
         base_metadata = {
             "id": workshop_id,
@@ -1241,7 +1348,10 @@ class WorkshopService:
         )
 
         return await self._execute_provisioning(
-            workshop_id, base_metadata, participants,
+            workshop_id,
+            base_metadata,
+            participants,
+            pre_created_users=pre_created_users,
         )
 
     async def delete_workshop(self, workshop_id: str) -> MessageResponse:
@@ -1267,8 +1377,33 @@ class WorkshopService:
                 detail="Resource cleanup is currently running.",
             )
 
-        # Scheduled workshops have no Azure resources — metadata-only deletion
+        # Scheduled workshops: delete pre-created Entra ID users + metadata
         if metadata.get("status") == WORKSHOP_STATUS_SCHEDULED:
+            # Delete pre-created Entra ID users (created disabled at schedule time)
+            planned = metadata.get("planned_participants", [])
+            if planned:
+                upns = [p["upn"] for p in planned if p.get("upn")]
+                upn_to_oid = {
+                    p["upn"]: p["object_id"]
+                    for p in planned
+                    if p.get("upn") and p.get("object_id")
+                }
+                if upns:
+                    try:
+                        results = await self.entra_id.delete_users_bulk(
+                            upns, upn_to_object_id=upn_to_oid,
+                        )
+                        deleted_count = sum(1 for v in results.values() if v)
+                        logger.info(
+                            "Deleted %d/%d Entra ID users for scheduled workshop %s",
+                            deleted_count, len(upns), workshop_id,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to delete Entra ID users for scheduled workshop %s: %s",
+                            workshop_id, e,
+                        )
+
             try:
                 released = await self.storage.release_subscriptions_by_workshop(workshop_id)
                 if released:
@@ -1283,7 +1418,7 @@ class WorkshopService:
                 )
 
             await self.storage.delete_workshop_metadata(workshop_id)
-            planned_count = len(metadata.get("planned_participants", []))
+            planned_count = len(planned)
             logger.info("Scheduled workshop deleted: %s", workshop_id)
 
             return MessageResponse(

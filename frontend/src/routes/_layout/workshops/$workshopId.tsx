@@ -1104,7 +1104,7 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
               <CardTitle>{isScheduled ? "예정 참가자 목록" : "참가자 목록"}</CardTitle>
               <CardDescription>
                 {isScheduled
-                  ? "프로비저닝 대기 중인 참가자 목록입니다. 시작 시각 1시간 전에 자동으로 프로비저닝됩니다."
+                  ? "Entra ID 계정이 비활성 상태로 생성되었습니다. 시작 시각 1시간 전에 자동으로 활성화 및 리소스 프로비저닝됩니다."
                   : "워크샵에 등록된 참가자 목록입니다"}
               </CardDescription>
               {!isScheduled && invalidAliases.size > 0 && (
@@ -1125,8 +1125,11 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
                       >
                         <div className="flex-1 min-w-0">
                           <p className="font-medium truncate">{p.alias}</p>
-                          <p className="text-sm text-muted-foreground truncate">{p.email}</p>
+                          <p className="text-sm text-muted-foreground truncate">{p.upn}</p>
                         </div>
+                        <span className="inline-flex items-center rounded-md bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700 ring-1 ring-inset ring-amber-600/20">
+                          계정 비활성
+                        </span>
                       </div>
                     ))}
                   </div>
