@@ -95,14 +95,18 @@ class WorkshopCreate(BaseModel):
 
 
 class ParticipantData(BaseModel):
-    """워크샵 메타데이터에 저장되는 참가자 데이터."""
+    """워크샵 메타데이터에 저장되는 참가자 데이터.
+
+    completed 상태의 워크샵은 _strip_sensitive_participant_data()에 의해
+    password, object_id가 제거되므로 Optional로 정의한다.
+    """
 
     alias: str
     upn: str
-    password: str
+    password: Optional[str] = None
     subscription_id: str = ""  # Default empty for backward compatibility; service layer falls back to default sub
     resource_group: str = ""  # Optional: only populated when a per-participant RG is created
-    object_id: str
+    object_id: Optional[str] = None
 
 
 class SubscriptionInfo(BaseModel):
@@ -172,6 +176,14 @@ class WorkshopMetadata(BaseModel):
     deployment_region: str = Field(
         default="",
         description="리소스 그룹 및 템플릿 배포 리전. 비어 있으면 allowed_regions[0] 사용.",
+    )
+    template_parameters: Optional[dict] = Field(
+        default=None,
+        description="ARM 템플릿 배포 파라미터. .parameters.json에서 파싱된 값.",
+    )
+    uploaded_template_content: Optional[str] = Field(
+        default=None,
+        description="업로드된 일회성 ARM 템플릿 JSON 문자열. 사전 등록 템플릿과 배타적.",
     )
     policy: PolicyData
     status: str = "active"
