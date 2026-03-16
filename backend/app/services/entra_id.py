@@ -83,12 +83,18 @@ class EntraIDService:
             or "Insufficient privileges" in error_str
         )
 
-    async def create_user(self, alias: str, password: Optional[str] = None) -> dict:
+    async def create_user(
+        self,
+        alias: str,
+        password: Optional[str] = None,
+        account_enabled: bool = True,
+    ) -> dict:
         """새 Entra ID 사용자를 생성한다.
 
         Args:
             alias: 사용자 alias (UPN의 username 파트).
             password: 임시 비밀번호 (미지정 시 자동 생성).
+            account_enabled: 계정 활성화 여부. False면 비활성 상태로 생성.
 
         Returns:
             사용자 정보 딕셔너리 (object_id, upn, alias, password).
@@ -105,7 +111,7 @@ class EntraIDService:
 
         try:
             user = User(
-                account_enabled=True,
+                account_enabled=account_enabled,
                 display_name=display_name,
                 mail_nickname=alias,
                 user_principal_name=upn,
@@ -141,16 +147,21 @@ class EntraIDService:
                 user_alias=alias,
             )
 
-    async def create_users_bulk(self, aliases: list[str]) -> list[dict]:
+    async def create_users_bulk(
+        self,
+        aliases: list[str],
+        account_enabled: bool = True,
+    ) -> list[dict]:
         """여러 Entra ID 사용자를 동시에 생성한다.
 
         Args:
             aliases: 사용자 alias 목록.
+            account_enabled: 계정 활성화 여부. False면 비활성 상태로 생성.
 
         Returns:
             성공적으로 생성된 사용자 정보 딕셔너리 리스트.
         """
-        tasks = [self.create_user(alias) for alias in aliases]
+        tasks = [self.create_user(alias, account_enabled=account_enabled) for alias in aliases]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         users = []
@@ -294,6 +305,60 @@ class EntraIDService:
                 status[upn] = result
 
         return status
+
+    async def enable_user(self, user_id: str) -> bool:
+        """비활성 Entra ID 사용자를 활성화한다.
+
+        Args:
+            user_id: 사용자 Object ID 또는 UPN.
+
+        Returns:
+            성공 시 True.
+
+        Raises:
+            EntraIDAuthorizationError: 권한이 부족한 경우.
+            UserCreationError: 사용자 업데이트에 실패한 경우.
+        """
+        try:
+            await self.client.users.by_user_id(user_id).patch(
+                User(account_enabled=True)
+            )
+            logger.info("Enabled Entra ID user: %s", user_id)
+            return True
+        except Exception as e:
+            error_code, response_code = self._extract_graph_error(e)
+            if self._is_authorization_error(error_code, response_code, str(e)):
+                raise EntraIDAuthorizationError(
+                    f"사용자 '{user_id}' 활성화 권한이 없습니다."
+                )
+            logger.error("Failed to enable user %s: %s", user_id, e)
+            raise UserCreationError(
+                f"사용자 '{user_id}' 활성화 실패: {e}",
+                user_alias=user_id,
+            )
+
+    async def enable_users_bulk(self, user_ids: list[str]) -> list[str]:
+        """여러 Entra ID 사용자를 동시에 활성화한다.
+
+        Args:
+            user_ids: Object ID 또는 UPN 목록.
+
+        Returns:
+            성공적으로 활성화된 user_id 리스트.
+        """
+        tasks = [self.enable_user(uid) for uid in user_ids]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        enabled = []
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.error(
+                    "Failed to enable user %s: %s", user_ids[i], result,
+                )
+            else:
+                enabled.append(user_ids[i])
+
+        return enabled
 
     async def get_user(self, user_principal_name: str) -> Optional[dict]:
         """사용자 정보를 조회한다.
