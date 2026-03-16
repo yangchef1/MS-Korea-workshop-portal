@@ -3,6 +3,7 @@
 API 라우터에서 분리된 워크샵 생성/조회/삭제 오케스트레이션을 담당한다.
 """
 import asyncio
+import json
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta, timezone
@@ -41,6 +42,113 @@ _KST = timezone(timedelta(hours=9))
 
 # Workshops starting within this window are provisioned immediately
 IMMEDIATE_PROVISION_THRESHOLD = timedelta(hours=1)
+
+# Azure ARM template deployment limit (4 MB)
+MAX_TEMPLATE_FILE_SIZE = 4 * 1024 * 1024
+MAX_PARAMETERS_FILE_SIZE = 1 * 1024 * 1024
+
+ALLOWED_TEMPLATE_EXTENSIONS = {".json", ".bicep"}
+ALLOWED_PARAMETERS_EXTENSIONS = {".json"}
+
+
+async def _parse_template_file(upload_file) -> tuple[dict[str, Any], str]:
+    """업로드된 ARM/Bicep 템플릿 파일을 파싱하여 배포 가능한 ARM JSON dict를 반환한다.
+
+    Bicep 파일(.bicep)은 서버에서 ARM JSON으로 컴파일한다.
+    ARM 파일(.json)은 JSON 유효성을 검증한다.
+
+    Args:
+        upload_file: FastAPI UploadFile 객체.
+
+    Returns:
+        (ARM 템플릿 JSON dict, 원본 콘텐츠 문자열) 튜플.
+
+    Raises:
+        InvalidInputError: 파일 크기 초과, 확장자 불일치, JSON 파싱 실패 시.
+    """
+    import os
+
+    filename = upload_file.filename or ""
+    ext = os.path.splitext(filename)[1].lower()
+
+    if ext not in ALLOWED_TEMPLATE_EXTENSIONS:
+        raise InvalidInputError(
+            f"Unsupported template file extension '{ext}'. "
+            f"Allowed: {ALLOWED_TEMPLATE_EXTENSIONS}"
+        )
+
+    content = await upload_file.read()
+    if len(content) > MAX_TEMPLATE_FILE_SIZE:
+        raise InvalidInputError(
+            f"Template file exceeds maximum size of {MAX_TEMPLATE_FILE_SIZE // (1024 * 1024)} MB"
+        )
+
+    content_str = content.decode("utf-8")
+
+    if ext == ".bicep":
+        from app.services.resource_manager import compile_bicep_to_arm
+
+        compiled_arm_str = await compile_bicep_to_arm(content_str)
+        return json.loads(compiled_arm_str), content_str
+
+    # .json — validate as ARM template
+    try:
+        template_dict = json.loads(content_str)
+    except json.JSONDecodeError as e:
+        raise InvalidInputError(f"Invalid JSON in template file: {e}") from e
+
+    if not isinstance(template_dict, dict):
+        raise InvalidInputError("Template file must be a JSON object")
+
+    return template_dict, content_str
+
+
+async def _parse_parameters_file(upload_file) -> dict[str, Any]:
+    """ARM 파라미터 파일(.parameters.json)을 파싱하여 배포용 parameters dict를 반환한다.
+
+    ARM 표준 형식({\"parameters\": {\"key\": {\"value\": ...}}})을 지원한다.
+    간소화 형식({\"key\": {\"value\": ...}})도 허용한다.
+
+    Args:
+        upload_file: FastAPI UploadFile 객체.
+
+    Returns:
+        ARM 배포용 parameters dict (예: {\"location\": {\"value\": \"koreacentral\"}}).
+
+    Raises:
+        InvalidInputError: 파일 크기 초과, JSON 파싱 실패, 형식 불일치 시.
+    """
+    content = await upload_file.read()
+    if len(content) > MAX_PARAMETERS_FILE_SIZE:
+        raise InvalidInputError(
+            f"Parameters file exceeds maximum size of "
+            f"{MAX_PARAMETERS_FILE_SIZE // (1024 * 1024)} MB"
+        )
+
+    try:
+        params_data = json.loads(content.decode("utf-8"))
+    except json.JSONDecodeError as e:
+        raise InvalidInputError(f"Invalid JSON in parameters file: {e}") from e
+
+    if not isinstance(params_data, dict):
+        raise InvalidInputError("Parameters file must be a JSON object")
+
+    # ARM standard format: {"$schema": ..., "contentVersion": ..., "parameters": {...}}
+    if "parameters" in params_data and isinstance(params_data["parameters"], dict):
+        return params_data["parameters"]
+
+    # Simplified or bare format: strip $-prefixed keys and wrap values if needed
+    filtered = {k: v for k, v in params_data.items() if not k.startswith("$")}
+    if not filtered:
+        return {}
+
+    result = {}
+    for k, v in filtered.items():
+        if isinstance(v, dict) and "value" in v:
+            result[k] = v
+        else:
+            result[k] = {"value": v}
+    return result
 
 
 def _strip_sensitive_participant_data(workshop: dict) -> dict:
@@ -405,8 +513,21 @@ class WorkshopService:
         regions: list[str],
         denied_services: list[str],
         allowed_vm_skus: list[str] | None = None,
+        template_dict: dict[str, Any] | None = None,
+        template_parameters: dict[str, Any] | None = None,
     ) -> Optional[dict]:
-        """개별 참가자의 RBAC, ARM 배포, 정책을 설정한다."""
+        """개별 참가자의 RBAC, ARM 배포, 정책을 설정한다.
+
+        Args:
+            user: Entra ID 유저 정보.
+            rg_result: 생성된 리소스 그룹 정보.
+            base_resources_template: 사전 등록 템플릿 이름.
+            regions: 허용 리전 목록.
+            denied_services: 거부 서비스 목록.
+            allowed_vm_skus: 허용 VM SKU 목록.
+            template_dict: 업로드된 일회성 ARM 템플릿 dict (사전 등록 템플릿과 배타적).
+            template_parameters: ARM 배포 파라미터 dict.
+        """
         if not rg_result:
             return None
 
@@ -421,13 +542,23 @@ class WorkshopService:
                 subscription_id=subscription_id,
             )
 
-            if base_resources_template and base_resources_template != NO_TEMPLATE:
+            deploy_params = template_parameters or {}
+
+            # Uploaded template and pre-registered template are mutually exclusive
+            if template_dict:
+                await self.resource_mgr.deploy_template(
+                    resource_group_name=rg_result["name"],
+                    template=template_dict,
+                    parameters=deploy_params,
+                    subscription_id=subscription_id,
+                )
+            elif base_resources_template and base_resources_template != NO_TEMPLATE:
                 template = await self.storage.get_template(base_resources_template)
                 if template:
                     await self.resource_mgr.deploy_template(
                         resource_group_name=rg_result["name"],
                         template=template,
-                        parameters={},
+                        parameters=deploy_params,
                         subscription_id=subscription_id,
                     )
 
@@ -500,11 +631,21 @@ class WorkshopService:
         description: str,
         survey_url: Optional[str],
         user: Optional[dict[str, Any]],
+        template_file=None,
+        parameters_file=None,
     ) -> WorkshopDetail:
         """새 워크샵을 생성한다.
 
         start_date가 현재 시각 + 1시간 이내이면 즉시 프로비저닝하고,
         그렇지 않으면 scheduled 상태로 저장하여 Provision Job이 처리하도록 한다.
+
+        템플릿 선택 방식 (하나만 사용 가능):
+          1. base_resources_template으로 사전 등록 템플릿 이름 지정
+          2. template_file로 일회성 ARM/Bicep 파일 직접 업로드
+          동시에 지정하면 InvalidInputError를 발생시킨다.
+
+        parameters_file은 ARM 표준 파라미터 파일(.parameters.json)이며,
+        템플릿 배포 시 parameters로 전달된다.
 
         Args:
             name: 워크샵 이름.
@@ -520,6 +661,8 @@ class WorkshopService:
             description: 워크샵 설명.
             survey_url: 설문 URL.
             user: 생성자 정보.
+            template_file: 일회성 ARM/Bicep 템플릿 파일 (선택).
+            parameters_file: ARM 파라미터 파일 (선택).
 
         Returns:
             생성 또는 예약된 WorkshopDetail.
@@ -548,6 +691,35 @@ class WorkshopService:
             raise InvalidInputError(
                 f"Deployment region '{resolved_deployment_region}' is not in "
                 f"allowed regions: {regions}"
+            )
+
+        # Validate mutual exclusivity: pre-registered template vs uploaded file
+        has_preset = base_resources_template and base_resources_template != NO_TEMPLATE
+        has_upload = template_file and getattr(template_file, "filename", None)
+        if has_preset and has_upload:
+            raise InvalidInputError(
+                "Cannot use both a pre-registered template and an uploaded "
+                "template file. Choose one."
+            )
+
+        uploaded_template_dict: dict[str, Any] | None = None
+        uploaded_template_content: str | None = None
+        if has_upload:
+            uploaded_template_dict, uploaded_template_content = (
+                await _parse_template_file(template_file)
+            )
+            logger.info(
+                "Using uploaded template file: %s", template_file.filename
+            )
+
+        # Parse parameters file
+        template_parameters: dict[str, Any] | None = None
+        if parameters_file and parameters_file.filename:
+            template_parameters = await _parse_parameters_file(parameters_file)
+            logger.info(
+                "Parsed %d template parameter(s) from %s",
+                len(template_parameters),
+                parameters_file.filename,
             )
 
         try:
@@ -580,6 +752,8 @@ class WorkshopService:
             "end_date": end_date,
             "base_resources_template": base_resources_template,
             "deployment_region": resolved_deployment_region,
+            "template_parameters": template_parameters,
+            "uploaded_template_content": uploaded_template_content,
             "policy": {
                 "allowed_regions": regions,
                 "denied_services": services,
@@ -603,6 +777,7 @@ class WorkshopService:
         if is_immediate:
             return await self._execute_provisioning(
                 workshop_id, base_metadata, participants,
+                uploaded_template_dict=uploaded_template_dict,
             )
         return await self._schedule_workshop(
             workshop_id, base_metadata, participants,
@@ -670,6 +845,7 @@ class WorkshopService:
         workshop_id: str,
         base_metadata: dict[str, Any],
         participants: list[dict[str, str]],
+        uploaded_template_dict: dict[str, Any] | None = None,
     ) -> WorkshopDetail:
         """Azure 리소스를 프로비저닝하여 워크샵을 활성화한다.
 
@@ -681,6 +857,7 @@ class WorkshopService:
             workshop_id: 워크샵 고유 식별자.
             base_metadata: 공통 메타데이터 (id, name, dates, policy 등).
             participants: 참가자 목록 [{alias, email}].
+            uploaded_template_dict: 업로드된 일회성 ARM 템플릿 dict.
 
         Returns:
             활성화된 WorkshopDetail.
@@ -698,6 +875,7 @@ class WorkshopService:
         end_date = base_metadata["end_date"]
         base_resources_template = base_metadata.get("base_resources_template", "")
         resolved_deployment_region = base_metadata.get("deployment_region", "")
+        template_parameters = base_metadata.get("template_parameters")
         policy = base_metadata.get("policy", {})
         regions = policy.get("allowed_regions", [])
         services = policy.get("denied_services", [])
@@ -772,6 +950,13 @@ class WorkshopService:
                 for rg_result in rg_results
             ]
 
+            # Resolve uploaded template: from arg (immediate) or metadata (scheduled)
+            effective_template_dict = uploaded_template_dict
+            if not effective_template_dict:
+                uploaded_content = base_metadata.get("uploaded_template_content")
+                if uploaded_content:
+                    effective_template_dict = json.loads(uploaded_content)
+
             setup_tasks = [
                 self._setup_participant(
                     user=created_user,
@@ -783,6 +968,8 @@ class WorkshopService:
                     regions=regions,
                     denied_services=services,
                     allowed_vm_skus=vm_skus,
+                    template_dict=effective_template_dict,
+                    template_parameters=template_parameters,
                 )
                 for created_user, spec in zip(user_results, rg_specs)
             ]
@@ -984,6 +1171,8 @@ class WorkshopService:
             "end_date": metadata["end_date"],
             "base_resources_template": metadata.get("base_resources_template", ""),
             "deployment_region": metadata.get("deployment_region", ""),
+            "template_parameters": metadata.get("template_parameters"),
+            "uploaded_template_content": metadata.get("uploaded_template_content"),
             "policy": metadata.get("policy", {}),
             "created_at": metadata.get("created_at", ""),
             "created_by": metadata.get("created_by", ""),

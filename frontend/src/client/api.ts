@@ -419,6 +419,10 @@ export interface CreateWorkshopRequest {
   vm_sku_preset?: string
   deployment_region?: string
   participants_file: File
+  /** One-time ARM/Bicep template file upload (.json / .bicep). */
+  template_file?: File
+  /** ARM parameters file (.parameters.json). */
+  parameters_file?: File
   survey_url?: string
   description?: string
 }
@@ -511,6 +515,12 @@ export const workshopApi = {
     }
     if (data.deployment_region) {
       formData.append("deployment_region", data.deployment_region)
+    }
+    if (data.template_file) {
+      formData.append("template_file", data.template_file)
+    }
+    if (data.parameters_file) {
+      formData.append("parameters_file", data.parameters_file)
     }
 
     const response = await apiClient.post<Workshop>("/workshops", formData, {
