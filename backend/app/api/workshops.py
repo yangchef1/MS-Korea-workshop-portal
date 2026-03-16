@@ -227,6 +227,12 @@ async def create_workshop(
     vm_sku_preset: str = Form(default=""),
     deployment_region: str = Form(default=""),
     participants_file: UploadFile = File(...),
+    template_file: Optional[UploadFile] = File(
+        default=None, description="일회성 ARM/Bicep 템플릿 파일 (.json / .bicep)",
+    ),
+    parameters_file: Optional[UploadFile] = File(
+        default=None, description="ARM 파라미터 파일 (.parameters.json)",
+    ),
     description: str = Form(default=""),
     survey_url: Optional[str] = Form(default=None, description="M365 Forms 만족도 조사 URL"),
     user=Depends(get_current_user),
@@ -237,6 +243,14 @@ async def create_workshop(
     CSV 형식: 이메일만 포함하는 단일 컬럼.
     구독은 사용 가능한 풀에서 순차적으로 자동 배정한다.
     Azure 리소스 생성 후 DB 저장이 실패하면 보상 트랜잭션(rollback)을 수행한다.
+
+    템플릿 선택 방식 (하나만 사용 가능):
+      1. base_resources_template으로 사전 등록 템플릿 이름 지정
+      2. template_file로 일회성 ARM/Bicep 파일 직접 업로드
+      동시에 지정하면 400 에러를 반환한다.
+
+    parameters_file은 ARM 표준 파라미터 파일(.parameters.json)이며,
+    템플릿 배포 시 parameters로 전달된다.
     """
     return await workshop_service.create_workshop(
         name=name,
@@ -249,6 +263,8 @@ async def create_workshop(
         vm_sku_preset=vm_sku_preset,
         deployment_region=deployment_region,
         participants_file=participants_file,
+        template_file=template_file,
+        parameters_file=parameters_file,
         description=description,
         survey_url=survey_url,
         user=user,
