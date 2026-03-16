@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 _KST = timezone(timedelta(hours=9))
 
 from app.config import settings
+from app.exceptions import PolicyNotFoundError
 from app.models import DeletionFailureItem
 from app.services.cost import cost_service
 from app.services.entra_id import entra_id_service
@@ -81,40 +82,56 @@ async def cleanup_expired_workshops() -> None:
     )
 
     # 3. Clean up each expired workshop
-    successful_workshops = []
+    successful_count = 0
     for ws in expired:
-        success = await _cleanup_single_workshop(ws)
-        if success:
-            successful_workshops.append(ws)
+        fully_succeeded, releasable_ids = await _cleanup_single_workshop(ws)
+        if fully_succeeded:
+            successful_count += 1
 
-    # 4. Release subscriptions for successfully cleaned workshops
-    for ws in successful_workshops:
-        try:
-            released = await storage_service.release_subscriptions_by_workshop(
-                ws["id"]
-            )
-            logger.info(
-                "Released %d subscription(s) for workshop %s",
-                len(released),
+        # Release subscriptions whose resources were fully cleaned up
+        if releasable_ids:
+            try:
+                await storage_service.release_subscriptions(releasable_ids)
+                logger.info(
+                    "Released %d subscription(s) for workshop %s",
+                    len(releasable_ids),
+                    ws["id"],
+                )
+            except Exception as e:
+                logger.error(
+                    "Failed to release subscriptions for workshop %s: %s",
+                    ws["id"],
+                    e,
+                )
+
+        if not fully_succeeded and releasable_ids:
+            # Count locked subscriptions for logging
+            all_sub_ids = {p.get("subscription_id") for p in ws.get("participants", []) if p.get("subscription_id")}
+            locked_count = len(all_sub_ids) - len(releasable_ids)
+            logger.warning(
+                "Workshop %s: released %d subscription(s), %d still locked due to cleanup failures",
                 ws["id"],
-            )
-        except Exception as e:
-            logger.error(
-                "Failed to release subscriptions for workshop %s: %s",
-                ws["id"],
-                e,
+                len(releasable_ids),
+                locked_count,
             )
 
     logger.info(
-        "Cleanup job complete: %d/%d workshops cleaned (run_id=%s)",
-        len(successful_workshops),
+        "Cleanup job complete: %d/%d workshops fully cleaned (run_id=%s)",
+        successful_count,
         len(expired),
         run_id,
     )
 
 
-async def _cleanup_single_workshop(workshop: dict) -> bool:
-    """Clean up a single expired workshop. Returns True if fully successful."""
+async def _cleanup_single_workshop(workshop: dict) -> tuple[bool, list[str]]:
+    """Clean up a single expired workshop.
+
+    Returns:
+        (fully_succeeded, releasable_subscription_ids) tuple.
+        fully_succeeded is True when all resources were cleaned up.
+        releasable_subscription_ids contains subscription IDs whose
+        policy, resource group, and user deletions all succeeded.
+    """
     workshop_id = workshop["id"]
     workshop_name = workshop.get("name", "")
     participants = workshop.get("participants", [])
@@ -144,13 +161,15 @@ async def _cleanup_single_workshop(workshop: dict) -> bool:
         await storage_service.save_workshop_metadata(workshop_id, workshop)
         logger.info("Workshop '%s' transitioned to cleaning_up (snapshot captured)", workshop_name)
 
-    # Step 0: Remove policy assignments (per subscription)
+    # Step 0: Remove policy assignments (per subscription), track results
+    policy_status: dict[str, bool] = {}
     seen_subs: set[str] = set()
     for p in participants:
         sub_id = p.get("subscription_id")
         if sub_id and sub_id not in seen_subs:
             seen_subs.add(sub_id)
             sub_scope = f"/subscriptions/{sub_id}"
+            sub_policy_ok = True
             for assignment_name in (
                 WORKSHOP_ALLOWED_LOCATIONS_ASSIGNMENT,
                 WORKSHOP_DENIED_RESOURCES_ASSIGNMENT,
@@ -162,12 +181,31 @@ async def _cleanup_single_workshop(workshop: dict) -> bool:
                         assignment_name=assignment_name,
                         subscription_id=sub_id,
                     )
-                except Exception:
-                    # Policy may already be removed; swallow and continue
+                except PolicyNotFoundError:
+                    # Already removed — treat as success
                     pass
-            logger.info("Removed policies from subscription %s", sub_id)
+                except Exception as e:
+                    sub_policy_ok = False
+                    error_msg = f"Failed to delete policy '{assignment_name}' on subscription '{sub_id}'"
+                    errors.append(error_msg)
+                    logger.warning("%s: %s", error_msg, e)
+                    await _save_failure(
+                        workshop_id=workshop_id,
+                        workshop_name=workshop_name,
+                        resource_type="policy",
+                        resource_name=assignment_name,
+                        subscription_id=sub_id,
+                        error_message=f"{error_msg}: {e}",
+                        failed_at=now_iso,
+                    )
+            policy_status[sub_id] = sub_policy_ok
+            if sub_policy_ok:
+                logger.info("Removed policies from subscription %s", sub_id)
+            else:
+                logger.warning("Partially failed to remove policies from subscription %s", sub_id)
 
     # Step 1: Delete resource groups
+    rg_status: dict[str, bool] = {}
     rg_specs = []
     for p in participants:
         rg_name = p.get("resource_group")
@@ -198,10 +236,10 @@ async def _cleanup_single_workshop(workshop: dict) -> bool:
                 )
 
     # Step 2: Delete Entra ID users (with object_id optimization)
+    user_status: dict[str, bool] = {}
     upns = [p.get("upn") for p in participants if p.get("upn")]
     if upns:
         logger.info("Deleting %d Entra ID user(s)...", len(upns))
-        # Pass upn_to_object_id to skip Graph API lookup per user
         upn_to_object_id = {
             p["upn"]: p["object_id"]
             for p in participants
@@ -225,6 +263,12 @@ async def _cleanup_single_workshop(workshop: dict) -> bool:
                     failed_at=now_iso,
                 )
 
+    # Determine which subscriptions can be released (all 3 checks passed)
+    from app.services.workshop import _get_releasable_subscription_ids
+    releasable_ids = _get_releasable_subscription_ids(
+        participants, policy_status, rg_status, user_status,
+    )
+
     # Step 3: Update workshop status or delete metadata
     if errors:
         # Partial failure: keep metadata, set status to 'failed'
@@ -238,7 +282,7 @@ async def _cleanup_single_workshop(workshop: dict) -> bool:
             )
         except Exception as e:
             logger.error("Failed to update workshop status: %s", e)
-        return False
+        return False, releasable_ids
 
     # Full success: mark as completed and strip sensitive data
     try:
@@ -251,8 +295,8 @@ async def _cleanup_single_workshop(workshop: dict) -> bool:
         logger.info("Successfully cleaned up workshop '%s' — status set to completed", workshop_name)
     except Exception as e:
         logger.error("Failed to update workshop status to completed: %s", e)
-        return False
-    return True
+        return False, releasable_ids
+    return True, releasable_ids
 
 
 async def _save_failure(
