@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import useCustomToast from "@/hooks/useCustomToast"
 
 export const Route = createFileRoute("/_layout/workshops/create")({
@@ -60,8 +61,8 @@ function CreateWorkshop() {
     { email: "" },
   ])
 
-  // Template mode derived from dropdown: "none" | "preset" | "upload"
-  const [templateMode, setTemplateMode] = useState<"none" | "preset" | "upload">("none")
+  // Template tab: "preset" (pre-registered select) | "upload" (one-time file)
+  const [templateTab, setTemplateTab] = useState<"preset" | "upload">("preset")
   const [templateFile, setTemplateFile] = useState<File | null>(null)
   const [parametersFile, setParametersFile] = useState<File | null>(null)
 
@@ -222,7 +223,7 @@ function CreateWorkshop() {
       name: formData.name,
       start_date: formData.start_date,
       end_date: formData.end_date,
-      base_resources_template: templateMode === "preset"
+      base_resources_template: templateTab === "preset"
         ? (formData.infra_template || "none")
         : "none",
       allowed_regions: selectedRegions.join(","),
@@ -231,8 +232,8 @@ function CreateWorkshop() {
       vm_sku_preset: selectedPreset || undefined,
       deployment_region: deploymentRegion || undefined,
       participants_file: csvFile,
-      template_file: templateMode === "upload" && templateFile ? templateFile : undefined,
-      parameters_file: templateMode !== "none" && parametersFile ? parametersFile : undefined,
+      template_file: templateTab === "upload" && templateFile ? templateFile : undefined,
+      parameters_file: parametersFile || undefined,
       survey_url: formData.survey_url || undefined,
       description: formData.description || undefined,
     })
@@ -592,73 +593,32 @@ function CreateWorkshop() {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="infra_template">인프라 템플릿</Label>
-              {templateMode === "upload" ? (
-                /* File upload mode: show file chip + cancel button */
-                <div className="flex items-center gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => document.getElementById("template-file-upload")?.click()}
-                  >
-                    <Upload className="h-4 w-4 mr-1" />
-                    {templateFile ? "파일 변경" : "템플릿 파일 선택"}
-                  </Button>
-                  {templateFile && (
-                    <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-primary/10 text-primary text-sm">
-                      {templateFile.name}
-                      <button
-                        type="button"
-                        onClick={() => setTemplateFile(null)}
-                        className="hover:bg-primary/20 rounded-full p-0.5"
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </span>
-                  )}
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      setTemplateMode("none")
-                      setTemplateFile(null)
-                      setParametersFile(null)
-                    }}
-                    className="text-muted-foreground"
-                  >
-                    취소
-                  </Button>
-                  <input
-                    id="template-file-upload"
-                    type="file"
-                    accept=".json,.bicep"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0]
-                      if (file) setTemplateFile(file)
-                      e.target.value = ""
-                    }}
-                    className="hidden"
-                  />
-                </div>
-              ) : (
-                /* Normal mode: dropdown + upload button side by side */
-                <div className="flex gap-2">
+              <Label>인프라 템플릿</Label>
+              <Tabs
+                value={templateTab}
+                onValueChange={(value) => {
+                  const tab = value as "preset" | "upload"
+                  setTemplateTab(tab)
+                  if (tab === "upload") {
+                    setFormData({ ...formData, infra_template: "" })
+                  } else {
+                    setTemplateFile(null)
+                  }
+                  setParametersFile(null)
+                }}
+              >
+                <TabsList className="w-full">
+                  <TabsTrigger value="preset" className="flex-1">사전 등록 선택</TabsTrigger>
+                  <TabsTrigger value="upload" className="flex-1">파일 업로드</TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="preset" className="space-y-2">
                   <select
                     id="infra_template"
                     value={formData.infra_template}
-                    onChange={(e) => {
-                      const value = e.target.value
-                      if (value === "") {
-                        setTemplateMode("none")
-                        setFormData({ ...formData, infra_template: "" })
-                        setParametersFile(null)
-                      } else {
-                        setTemplateMode("preset")
-                        setFormData({ ...formData, infra_template: value })
-                      }
-                    }}
+                    onChange={(e) =>
+                      setFormData({ ...formData, infra_template: e.target.value })
+                    }
                     disabled={isTemplatesLoading}
                     className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
                   >
@@ -671,66 +631,86 @@ function CreateWorkshop() {
                       </option>
                     ))}
                   </select>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="shrink-0"
-                    onClick={() => {
-                      setTemplateMode("upload")
-                      setFormData({ ...formData, infra_template: "" })
-                    }}
-                  >
-                    <Upload className="h-4 w-4 mr-1" />
-                    파일 업로드
-                  </Button>
-                </div>
-              )}
+                  <p className="text-xs text-muted-foreground">
+                    템플릿 관리에서 등록한 템플릿이 각 참가자 리소스 그룹에 배포됩니다.
+                  </p>
+                </TabsContent>
 
-              {templateMode !== "none" && (
-                <div className="flex items-center gap-2 mt-1">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => document.getElementById("parameters-file-upload")?.click()}
-                  >
-                    <Upload className="h-4 w-4 mr-1" />
-                    {parametersFile ? "파라미터 파일 변경" : "파라미터 파일 (.parameters.json)"}
-                  </Button>
-                  {parametersFile && (
-                    <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-primary/10 text-primary text-sm">
-                      {parametersFile.name}
-                      <button
-                        type="button"
-                        onClick={() => setParametersFile(null)}
-                        className="hover:bg-primary/20 rounded-full p-0.5"
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </span>
-                  )}
+                <TabsContent value="upload" className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => document.getElementById("template-file-upload")?.click()}
+                    >
+                      <Upload className="h-4 w-4 mr-1" />
+                      {templateFile ? "파일 변경" : "템플릿 파일 선택"}
+                    </Button>
+                    {templateFile && (
+                      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-primary/10 text-primary text-sm">
+                        {templateFile.name}
+                        <button
+                          type="button"
+                          onClick={() => setTemplateFile(null)}
+                          className="hover:bg-primary/20 rounded-full p-0.5"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </span>
+                    )}
+                  </div>
                   <input
-                    id="parameters-file-upload"
+                    id="template-file-upload"
                     type="file"
-                    accept=".json"
+                    accept=".json,.bicep"
                     onChange={(e) => {
                       const file = e.target.files?.[0]
-                      if (file) setParametersFile(file)
+                      if (file) setTemplateFile(file)
                       e.target.value = ""
                     }}
                     className="hidden"
                   />
-                </div>
-              )}
+                  <p className="text-xs text-muted-foreground">
+                    ARM(.json) 또는 Bicep(.bicep) 파일을 업로드하세요. 이 워크샵에만 일회성으로 사용됩니다.
+                  </p>
+                </TabsContent>
+              </Tabs>
 
-              <p className="text-xs text-muted-foreground">
-                {templateMode === "upload"
-                  ? "ARM(.json) 또는 Bicep(.bicep) 파일을 업로드하세요. 이 워크샵에만 일회성으로 사용됩니다."
-                  : templateMode === "preset"
-                    ? "선택한 템플릿이 각 참가자 리소스 그룹에 배포됩니다."
-                    : "사전 등록 템플릿을 선택하거나, 파일을 직접 업로드할 수 있습니다."}
-              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => document.getElementById("parameters-file-upload")?.click()}
+                >
+                  <Upload className="h-4 w-4 mr-1" />
+                  {parametersFile ? "파라미터 파일 변경" : "파라미터 파일 (.parameters.json)"}
+                </Button>
+                {parametersFile && (
+                  <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-primary/10 text-primary text-sm">
+                    {parametersFile.name}
+                    <button
+                      type="button"
+                      onClick={() => setParametersFile(null)}
+                      className="hover:bg-primary/20 rounded-full p-0.5"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
+                )}
+                <input
+                  id="parameters-file-upload"
+                  type="file"
+                  accept=".json"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0]
+                    if (file) setParametersFile(file)
+                    e.target.value = ""
+                  }}
+                  className="hidden"
+                />
+              </div>
             </div>
 
             <div className="space-y-2">
