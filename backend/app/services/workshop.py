@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta, timezone
 from typing import Any, Optional
 
 from app.config import settings
-from app.exceptions import AppError, InvalidDateRangeError, InvalidInputError, NotFoundError
+from app.exceptions import AppError, InvalidDateRangeError, InvalidInputError, NotFoundError, PolicyNotFoundError
 from app.models import DeletionFailureItem, MessageResponse, WorkshopCreateInput, WorkshopDetail, WorkshopResponse
 from app.services.cost import cost_service
 from app.services.entra_id import entra_id_service
@@ -246,6 +246,59 @@ async def _capture_workshop_snapshot(
         "cost_snapshot": cost_snapshot,
         "resource_snapshot": resource_snapshot,
     }
+
+
+def _get_releasable_subscription_ids(
+    participants: list[dict],
+    policy_status: dict[str, bool],
+    rg_status: dict[str, bool],
+    user_status: dict[str, bool],
+) -> list[str]:
+    """구독별로 모든 리소스 정리가 성공했는지 판단하여 해제 가능한 구독 ID를 반환한다.
+
+    한 구독에 여러 참가자가 배정될 수 있으므로, 해당 구독의 모든 참가자에 대해
+    policy 삭제, resource group 삭제, user 삭제가 모두 성공한 경우에만 해제 가능으로 판단한다.
+
+    Args:
+        participants: 워크샵 참가자 목록 (subscription_id, resource_group, upn 포함).
+        policy_status: {subscription_id: True/False} 정책 삭제 성공 여부.
+        rg_status: {rg_name: True/False} 리소스 그룹 삭제 성공 여부.
+        user_status: {upn: True/False} 유저 삭제 성공 여부.
+
+    Returns:
+        해제 가능한 구독 ID 목록.
+    """
+    from collections import defaultdict
+
+    # Group participants by subscription_id
+    sub_participants: dict[str, list[dict]] = defaultdict(list)
+    for participant in participants:
+        sub_id = participant.get("subscription_id")
+        if sub_id:
+            sub_participants[sub_id].append(participant)
+
+    releasable: list[str] = []
+    for sub_id, sub_parts in sub_participants.items():
+        # Policy must have been deleted successfully for this subscription
+        if not policy_status.get(sub_id, True):
+            continue
+
+        all_clean = True
+        for participant in sub_parts:
+            rg_name = participant.get("resource_group")
+            if rg_name and not rg_status.get(rg_name, False):
+                all_clean = False
+                break
+
+            upn = participant.get("upn")
+            if upn and not user_status.get(upn, False):
+                all_clean = False
+                break
+
+        if all_clean:
+            releasable.append(sub_id)
+
+    return releasable
 
 
 class WorkshopService:
@@ -1276,13 +1329,18 @@ class WorkshopService:
         participants = metadata.get("participants", [])
         workshop_name = metadata.get("name", "")
 
+        # Step 0: Remove policy assignments (per subscription), track results
+        policy_status: dict[str, bool] = {}
+        seen_subs: set[str] = set()
         rg_specs = []
         for participant in participants:
             subscription_id = participant.get("subscription_id")
             rg_name = participant.get("resource_group")
 
-            if subscription_id:
+            if subscription_id and subscription_id not in seen_subs:
+                seen_subs.add(subscription_id)
                 sub_scope = f"/subscriptions/{subscription_id}"
+                sub_policy_ok = True
                 for assignment_name in (
                     WORKSHOP_ALLOWED_LOCATIONS_ASSIGNMENT,
                     WORKSHOP_DENIED_RESOURCES_ASSIGNMENT,
@@ -1294,13 +1352,18 @@ class WorkshopService:
                             assignment_name=assignment_name,
                             subscription_id=subscription_id,
                         )
+                    except PolicyNotFoundError:
+                        # Already removed — treat as success
+                        pass
                     except Exception as e:
+                        sub_policy_ok = False
                         logger.warning(
                             "Failed to remove policy %s on %s: %s",
                             assignment_name,
                             subscription_id,
                             e,
                         )
+                policy_status[subscription_id] = sub_policy_ok
 
             if rg_name:
                 rg_specs.append({
@@ -1322,6 +1385,23 @@ class WorkshopService:
 
         failures: list[DeletionFailureItem] = []
         now_iso = datetime.now(UTC).isoformat()
+
+        for sub_id, ok in policy_status.items():
+            if not ok:
+                failures.append(
+                    DeletionFailureItem(
+                        id=str(uuid.uuid4()),
+                        workshop_id=workshop_id,
+                        workshop_name=workshop_name,
+                        resource_type="policy",
+                        resource_name="policy_assignments",
+                        subscription_id=sub_id,
+                        error_message=f"Failed to delete policy assignments on subscription '{sub_id}'",
+                        failed_at=now_iso,
+                        status="pending",
+                        retry_count=0,
+                    )
+                )
 
         for spec in rg_specs:
             rg_name = spec["name"]
@@ -1366,22 +1446,32 @@ class WorkshopService:
             metadata["status"] = WORKSHOP_STATUS_FAILED
             await self.storage.save_workshop_metadata(workshop_id, metadata)
 
-            try:
-                released = await self.storage.release_subscriptions_by_workshop(workshop_id)
-                logger.info(
-                    "Released %d subscription(s) during partial delete of workshop %s",
-                    len(released), workshop_id,
-                )
-            except Exception as e:
-                logger.error(
-                    "Failed to release subscriptions after partial deletion of workshop %s: %s",
-                    workshop_id, e,
-                )
+            # Release only subscriptions whose resources were fully cleaned up
+            releasable_ids = _get_releasable_subscription_ids(
+                participants, policy_status, rg_status, user_status,
+            )
+            if releasable_ids:
+                try:
+                    await self.storage.release_subscriptions(releasable_ids)
+                    logger.info(
+                        "Released %d subscription(s) during partial delete of workshop %s",
+                        len(releasable_ids), workshop_id,
+                    )
+                except Exception as e:
+                    logger.error(
+                        "Failed to release subscriptions after partial deletion of workshop %s: %s",
+                        workshop_id, e,
+                    )
 
+            all_sub_ids = {p.get("subscription_id") for p in participants if p.get("subscription_id")}
+            locked_count = len(all_sub_ids) - len(releasable_ids)
             logger.warning(
-                "Workshop %s deletion partially failed: %d failures",
+                "Workshop %s deletion partially failed: %d failures "
+                "(released %d subscription(s), %d still locked)",
                 workshop_id,
                 len(failures),
+                len(releasable_ids),
+                locked_count,
             )
             return
 
