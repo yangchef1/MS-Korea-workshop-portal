@@ -104,6 +104,14 @@ function ParticipantRow({
   const queryClient = useQueryClient()
   const { user } = useAuth()
 
+  const subscriptionNameMap = useMemo(() => {
+    const map = new Map<string, string>()
+    availableSubscriptions?.forEach((sub) => {
+      if (sub.display_name) map.set(sub.subscription_id, sub.display_name)
+    })
+    return map
+  }, [availableSubscriptions])
+
   const alias = participant.alias || participant.name
   const isInvalid = alias ? invalidAliases.has(alias) : false
   const [selectedSub, setSelectedSub] = useState(
@@ -145,7 +153,7 @@ function ParticipantRow({
             <div className="text-xs text-muted-foreground flex items-center gap-2">
               <span className="font-medium">구독</span>
               <span className={isInvalid ? "text-red-600" : ""}>
-                {participant.subscription_id}
+                {subscriptionNameMap.get(participant.subscription_id!) ?? participant.subscription_id}
               </span>
               {isInvalid && (
                 <span className="inline-flex items-center gap-1 text-red-600 text-xs">
@@ -390,7 +398,7 @@ function ResourcesList({ workshopId, workshopStatus, refetch, isRefetching }: { 
   )
 }
 
-function CostBreakdownRow({ item, alias }: { item: CostBreakdown; alias?: string }) {
+function CostBreakdownRow({ item, alias, subscriptionName }: { item: CostBreakdown; alias?: string; subscriptionName?: string }) {
   return (
     <div className="flex items-center justify-between p-4 border rounded-lg">
       <div className="flex items-center gap-3">
@@ -404,7 +412,7 @@ function CostBreakdownRow({ item, alias }: { item: CostBreakdown; alias?: string
             </div>
           )}
           <div className="font-medium text-xs text-muted-foreground truncate max-w-[300px]">
-            {item.subscription_id}
+            {subscriptionName ?? item.subscription_id}
           </div>
           {item.error && (
             <div className="text-xs text-yellow-600 flex items-center gap-1">
@@ -423,8 +431,15 @@ function CostBreakdownRow({ item, alias }: { item: CostBreakdown; alias?: string
   )
 }
 
-function CostAnalysis({ workshopId, workshopStatus, participants, refetch, isRefetching }: { workshopId: string; workshopStatus?: string; participants?: Participant[]; refetch: () => void; isRefetching: boolean }) {
+function CostAnalysis({ workshopId, workshopStatus, participants, availableSubscriptions, refetch, isRefetching }: { workshopId: string; workshopStatus?: string; participants?: Participant[]; availableSubscriptions?: SubscriptionInfo[]; refetch: () => void; isRefetching: boolean }) {
   const isCompleted = workshopStatus === "completed"
+  const subscriptionNameMap = useMemo(() => {
+    const map = new Map<string, string>()
+    availableSubscriptions?.forEach((sub) => {
+      if (sub.display_name) map.set(sub.subscription_id, sub.display_name)
+    })
+    return map
+  }, [availableSubscriptions])
   const subscriptionToAlias = useMemo(() => {
     const map = new Map<string, string>()
     participants?.forEach((p) => {
@@ -485,7 +500,7 @@ function CostAnalysis({ workshopId, workshopStatus, participants, refetch, isRef
         {data?.breakdown && data.breakdown.length > 0 ? (
           <div className="space-y-2">
             {data.breakdown.map((item) => (
-              <CostBreakdownRow key={item.subscription_id} item={item} alias={subscriptionToAlias.get(item.subscription_id)} />
+              <CostBreakdownRow key={item.subscription_id} item={item} alias={subscriptionToAlias.get(item.subscription_id)} subscriptionName={subscriptionNameMap.get(item.subscription_id)} />
             ))}
           </div>
         ) : (
@@ -1183,7 +1198,7 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <CostAnalysis workshopId={workshop.id} workshopStatus={workshop.status} participants={workshop.participants} refetch={refetchCost} isRefetching={isRefetchingCost} />
+                <CostAnalysis workshopId={workshop.id} workshopStatus={workshop.status} participants={workshop.participants} availableSubscriptions={workshop.available_subscriptions} refetch={refetchCost} isRefetching={isRefetchingCost} />
               </CardContent>
             </Card>
           </TabsContent>
