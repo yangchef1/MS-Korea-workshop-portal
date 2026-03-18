@@ -419,7 +419,6 @@ export interface CreateWorkshopRequest {
   denied_services: string  // comma-separated
   allowed_vm_skus?: string  // comma-separated
   vm_sku_preset?: string
-  deployment_region?: string
   participants_file: File
   /** One-time ARM/Bicep template file upload (.json / .bicep). */
   template_file?: File
@@ -514,9 +513,6 @@ export const workshopApi = {
     }
     if (data.vm_sku_preset) {
       formData.append("vm_sku_preset", data.vm_sku_preset)
-    }
-    if (data.deployment_region) {
-      formData.append("deployment_region", data.deployment_region)
     }
     if (data.template_file) {
       formData.append("template_file", data.template_file)

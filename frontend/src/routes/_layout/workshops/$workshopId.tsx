@@ -29,6 +29,7 @@ import {
   CheckCircle2,
   Info,
   Loader2,
+  Mail,
 } from "lucide-react"
 
 import { workshopApi, type Participant, type AzureResource, type CostBreakdown, type DeletionFailure, type SubscriptionInfo } from "@/client"
