@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router"
 import { useSuspenseQuery, useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
+import { QRCodeSVG } from "qrcode.react"
 import { Suspense, useMemo, useState } from "react"
 import { Link } from "@tanstack/react-router"
 import {
@@ -9,8 +10,8 @@ import {
   MapPin,
   Trash2,
   Copy,
-  Mail,
   Download,
+  QrCode,
   Server,
   RefreshCw,
   DollarSign,
@@ -599,53 +600,56 @@ function SurveyTab({ workshopId, surveyUrl }: { workshopId: string; surveyUrl?: 
         </CardContent>
       </Card>
 
-      {/* 설문 링크는 직접 공유 안내 (개인 이메일 미저장으로 이메일 전송 불가) */}
-      <Card>
-        <CardHeader>
-          <CardTitle>설문 링크 공유</CardTitle>
-          <CardDescription>
-            참가자에게 만족도 조사 링크를 직접 공유해 주세요
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {isSaved && urlInput ? (
-            <div className="flex items-center gap-4">
+      {/* QR 코드 및 링크 공유 */}
+      {isSaved && urlInput && (
+        <Card>
+          <CardHeader>
+            <CardTitle>설문 링크 공유</CardTitle>
+            <CardDescription>
+              QR 코드를 표시하거나 링크를 복사하여 참가자에게 공유하세요
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex items-center gap-3">
+              <Dialog>
+                <DialogTrigger asChild>
+                  <Button variant="outline">
+                    <QrCode className="h-4 w-4 mr-2" />
+                    QR 코드 보기
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="max-w-sm">
+                  <DialogHeader>
+                    <DialogTitle>만족도 조사 QR 코드</DialogTitle>
+                    <DialogDescription>
+                      스마트폰으로 스캔하여 설문에 참여하세요
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="flex flex-col items-center gap-4 py-4">
+                    <div className="rounded-lg border bg-white p-4">
+                      <QRCodeSVG value={urlInput} size={280} level="M" />
+                    </div>
+                    <p className="text-xs text-muted-foreground text-center break-all max-w-[280px]">
+                      {urlInput}
+                    </p>
+                  </div>
+                </DialogContent>
+              </Dialog>
               <Button variant="outline" onClick={copyToClipboard}>
                 <Copy className="h-4 w-4 mr-2" />
                 링크 복사
               </Button>
-              <p className="text-sm text-muted-foreground">
-                복사한 링크를 Teams, 채팅 등으로 참가자에게 공유하세요
-              </p>
+              <a
+                href={urlInput}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <Button variant="outline">
+                  <ExternalLink className="h-4 w-4 mr-2" />
+                  Forms 결과 보기
+                </Button>
+              </a>
             </div>
-          ) : (
-            <p className="text-muted-foreground text-sm">
-              먼저 만족도 조사 URL을 등록해 주세요.
-            </p>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Forms 결과 조회 */}
-      {isSaved && urlInput && (
-        <Card>
-          <CardHeader>
-            <CardTitle>결과 조회</CardTitle>
-            <CardDescription>
-              M365 Forms 결과 페이지에서 응답을 확인할 수 있습니다
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <a
-              href={urlInput}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              <Button variant="outline">
-                <ExternalLink className="h-4 w-4 mr-2" />
-                Forms 결과 보기
-              </Button>
-            </a>
           </CardContent>
         </Card>
       )}
