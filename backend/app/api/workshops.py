@@ -641,9 +641,9 @@ async def extend_end_date(
     workshop_id: str,
     body: EndDateExtension,
     workshop_service=Depends(get_workshop_service),
-    _: dict = Depends(require_admin),
+    user=Depends(get_current_user),
 ):
-    """워크샵의 종료 시간을 연장한다 (관리자 전용).
+    """워크샵의 종료 시간을 연장한다.
 
     기존 end_date보다 뒤로만 연장할 수 있다.
     active 상태일 때는 참가자 리소스 그룹의 end_date 태그도 동기화한다.
