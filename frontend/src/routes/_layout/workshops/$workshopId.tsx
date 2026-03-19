@@ -559,7 +559,7 @@ function SurveyTab({ workshopId, surveyUrl }: { workshopId: string; surveyUrl?: 
         </CardHeader>
         <CardContent className="space-y-4 overflow-hidden">
           {isEditing ? (
-            <div className="flex gap-2 min-w-0">
+            <div className="flex gap-2">
               <Input
                 type="url"
                 placeholder="https://forms.office.com/..."
@@ -598,10 +598,10 @@ function SurveyTab({ workshopId, surveyUrl }: { workshopId: string; surveyUrl?: 
                 <ExternalLink className="h-3 w-3 flex-shrink-0" />
                 <span className="truncate">{urlInput}</span>
               </a>
-              <Button variant="ghost" size="sm" onClick={copyToClipboard}>
+              <Button variant="ghost" size="sm" className="flex-shrink-0" onClick={copyToClipboard}>
                 <Copy className="h-3 w-3" />
               </Button>
-              <Button variant="ghost" size="sm" onClick={() => setIsEditing(true)}>
+              <Button variant="ghost" size="sm" className="flex-shrink-0" onClick={() => setIsEditing(true)}>
                 <Pencil className="h-3 w-3" />
               </Button>
             </div>
