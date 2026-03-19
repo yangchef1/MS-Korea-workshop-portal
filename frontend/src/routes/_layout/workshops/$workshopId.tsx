@@ -557,9 +557,9 @@ function SurveyTab({ workshopId, surveyUrl }: { workshopId: string; surveyUrl?: 
             M365 Forms 만족도 조사 링크를 등록하고 QR 코드로 공유하세요
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="space-y-4 overflow-hidden">
           {isEditing ? (
-            <div className="flex gap-2">
+            <div className="flex gap-2 min-w-0">
               <Input
                 type="url"
                 placeholder="https://forms.office.com/..."
@@ -588,12 +588,12 @@ function SurveyTab({ workshopId, surveyUrl }: { workshopId: string; surveyUrl?: 
               )}
             </div>
           ) : (
-            <div className="flex items-center gap-2 text-sm min-w-0">
+            <div className="flex items-center gap-2 text-sm min-w-0 overflow-hidden">
               <a
                 href={urlInput}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-primary hover:underline flex items-center gap-1 min-w-0"
+                className="text-primary hover:underline flex items-center gap-1 min-w-0 overflow-hidden"
               >
                 <ExternalLink className="h-3 w-3 flex-shrink-0" />
                 <span className="truncate">{urlInput}</span>
