@@ -19,7 +19,6 @@ import {
   ClipboardList,
   ExternalLink,
   Check,
-  Link as LinkIcon,
   AlertTriangle,
   RotateCw,
   UserX,
@@ -30,6 +29,7 @@ import {
   Info,
   Loader2,
   Mail,
+  Pencil,
 } from "lucide-react"
 
 import { workshopApi, type Participant, type AzureResource, type CostBreakdown, type DeletionFailure, type SubscriptionInfo } from "@/client"
@@ -520,12 +520,14 @@ function SurveyTab({ workshopId, surveyUrl }: { workshopId: string; surveyUrl?: 
   const queryClient = useQueryClient()
   const [urlInput, setUrlInput] = useState(surveyUrl || "")
   const [isSaved, setIsSaved] = useState(!!surveyUrl)
+  const [isEditing, setIsEditing] = useState(!surveyUrl)
 
   const updateUrlMutation = useMutation({
     mutationFn: (url: string) => workshopApi.updateSurveyUrl(workshopId, url),
     onSuccess: () => {
       showSuccessToast("만족도 조사 URL이 저장되었습니다")
       setIsSaved(true)
+      setIsEditing(false)
       queryClient.invalidateQueries({ queryKey: ["workshop", workshopId] })
     },
     onError: () => {
@@ -548,41 +550,44 @@ function SurveyTab({ workshopId, surveyUrl }: { workshopId: string; surveyUrl?: 
 
   return (
     <div className="space-y-4">
-      {/* URL 관리 */}
       <Card>
         <CardHeader>
-          <CardTitle>만족도 조사 URL</CardTitle>
+          <CardTitle>만족도 조사</CardTitle>
           <CardDescription>
-            M365 Forms에서 생성한 만족도 조사 링크를 등록하세요
+            M365 Forms 만족도 조사 링크를 등록하고 QR 코드로 공유하세요
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="flex gap-2">
-            <Input
-              type="url"
-              placeholder="https://forms.office.com/..."
-              value={urlInput}
-              onChange={(e) => {
-                setUrlInput(e.target.value)
-                setIsSaved(false)
-              }}
-              className="flex-1"
-            />
-            <Button
-              onClick={handleSaveUrl}
-              disabled={updateUrlMutation.isPending || (!urlInput.trim())}
-            >
-              {updateUrlMutation.isPending ? (
-                <RefreshCw className="h-4 w-4 animate-spin mr-2" />
-              ) : isSaved ? (
-                <Check className="h-4 w-4 mr-2" />
-              ) : (
-                <LinkIcon className="h-4 w-4 mr-2" />
+          {isEditing ? (
+            <div className="flex gap-2">
+              <Input
+                type="url"
+                placeholder="https://forms.office.com/..."
+                value={urlInput}
+                onChange={(e) => {
+                  setUrlInput(e.target.value)
+                  setIsSaved(false)
+                }}
+                className="flex-1"
+              />
+              <Button
+                onClick={handleSaveUrl}
+                disabled={updateUrlMutation.isPending || !urlInput.trim()}
+              >
+                {updateUrlMutation.isPending ? (
+                  <RefreshCw className="h-4 w-4 animate-spin mr-2" />
+                ) : (
+                  <Check className="h-4 w-4 mr-2" />
+                )}
+                저장
+              </Button>
+              {isSaved && (
+                <Button variant="ghost" onClick={() => { setUrlInput(surveyUrl || ""); setIsEditing(false) }}>
+                  취소
+                </Button>
               )}
-              {isSaved ? "저장됨" : "저장"}
-            </Button>
-          </div>
-          {isSaved && urlInput && (
+            </div>
+          ) : (
             <div className="flex items-center gap-2 text-sm">
               <a
                 href={urlInput}
@@ -596,22 +601,14 @@ function SurveyTab({ workshopId, surveyUrl }: { workshopId: string; surveyUrl?: 
               <Button variant="ghost" size="sm" onClick={copyToClipboard}>
                 <Copy className="h-3 w-3" />
               </Button>
+              <Button variant="ghost" size="sm" onClick={() => setIsEditing(true)}>
+                <Pencil className="h-3 w-3" />
+              </Button>
             </div>
           )}
-        </CardContent>
-      </Card>
 
-      {/* QR 코드 및 링크 공유 */}
-      {isSaved && urlInput && (
-        <Card>
-          <CardHeader>
-            <CardTitle>설문 링크 공유</CardTitle>
-            <CardDescription>
-              QR 코드를 표시하거나 링크를 복사하여 참가자에게 공유하세요
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center gap-3">
+          {isSaved && urlInput && !isEditing && (
+            <div className="flex items-center gap-3 pt-2">
               <Dialog>
                 <DialogTrigger asChild>
                   <Button variant="outline">
@@ -636,24 +633,10 @@ function SurveyTab({ workshopId, surveyUrl }: { workshopId: string; surveyUrl?: 
                   </div>
                 </DialogContent>
               </Dialog>
-              <Button variant="outline" onClick={copyToClipboard}>
-                <Copy className="h-4 w-4 mr-2" />
-                링크 복사
-              </Button>
-              <a
-                href={urlInput}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                <Button variant="outline">
-                  <ExternalLink className="h-4 w-4 mr-2" />
-                  Forms 결과 보기
-                </Button>
-              </a>
             </div>
-          </CardContent>
-        </Card>
-      )}
+          )}
+        </CardContent>
+      </Card>
     </div>
   )
 }
