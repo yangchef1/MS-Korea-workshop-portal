@@ -623,13 +623,10 @@ function SurveyTab({ workshopId, surveyUrl }: { workshopId: string; surveyUrl?: 
                       스마트폰으로 스캔하여 설문에 참여하세요
                     </DialogDescription>
                   </DialogHeader>
-                  <div className="flex flex-col items-center gap-4 py-4">
+                  <div className="flex flex-col items-center py-4">
                     <div className="rounded-lg border bg-white p-4">
                       <QRCodeSVG value={urlInput} size={280} level="M" />
                     </div>
-                    <p className="text-xs text-muted-foreground text-center break-all max-w-[280px]">
-                      {urlInput}
-                    </p>
                   </div>
                 </DialogContent>
               </Dialog>
