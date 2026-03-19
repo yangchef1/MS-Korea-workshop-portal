@@ -588,15 +588,15 @@ function SurveyTab({ workshopId, surveyUrl }: { workshopId: string; surveyUrl?: 
               )}
             </div>
           ) : (
-            <div className="flex items-center gap-2 text-sm">
+            <div className="flex items-center gap-2 text-sm min-w-0">
               <a
                 href={urlInput}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-primary hover:underline flex items-center gap-1 truncate"
+                className="text-primary hover:underline flex items-center gap-1 min-w-0"
               >
                 <ExternalLink className="h-3 w-3 flex-shrink-0" />
-                {urlInput}
+                <span className="truncate">{urlInput}</span>
               </a>
               <Button variant="ghost" size="sm" onClick={copyToClipboard}>
                 <Copy className="h-3 w-3" />
