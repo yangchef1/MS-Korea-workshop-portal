@@ -203,6 +203,11 @@ class Settings(BaseSettings):
     default_user_role: str = "Contributor"
     resource_group_prefix: str = "rg-workshop"
 
+    # Entra ID Security Group for Conditional Access Policy exclusion
+    # Set WORKSHOP_ATTENDEES_GROUP_ID env var per environment.
+    # Example: d4ca1936-d99e-4053-9904-bb0afa2e567e
+    workshop_attendees_group_id: str = ""
+
     # Logging: "json" for production (Azure Monitor), "text" for development
     log_format: str = "text"
     log_level: str = "INFO"

@@ -45,7 +45,8 @@ Exception Hierarchy:
     │       │   ├── EntraIDAuthorizationError (403)
     │       │   ├── UserCreationError
     │       │   ├── UserNotFoundError (404)
-    │       │   └── UserDeletionError
+    │       │   ├── UserDeletionError
+    │       │   └── GroupMembershipError
     │       └── CostServiceError
     │           └── CostQueryError
     └── ServiceUnavailableError (503)
@@ -84,6 +85,7 @@ from .azure import (
     UserCreationError,
     UserNotFoundError,
     UserDeletionError,
+    GroupMembershipError,
     InsufficientSubscriptionsError,
     CostServiceError,
     CostQueryError,
@@ -129,6 +131,7 @@ __all__ = [
     "UserCreationError",
     "UserNotFoundError",
     "UserDeletionError",
+    "GroupMembershipError",
     "InsufficientSubscriptionsError",
     "CostServiceError",
     "CostQueryError",

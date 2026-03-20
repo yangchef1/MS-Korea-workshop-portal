@@ -14,11 +14,13 @@ _DELETE_INITIAL_DELAY_SECONDS = 2.0
 
 from msgraph import GraphServiceClient
 from msgraph.generated.models.password_profile import PasswordProfile
+from msgraph.generated.models.reference_create import ReferenceCreate
 from msgraph.generated.models.user import User
 
 from app.config import settings
 from app.exceptions import (
     EntraIDAuthorizationError,
+    GroupMembershipError,
     UserCreationError,
     UserDeletionError,
     UserNotFoundError,
@@ -33,6 +35,10 @@ _ERROR_CODE_AUTHORIZATION_DENIED = "Authorization_RequestDenied"
 _ERROR_CODE_RESOURCE_NOT_FOUND = "Request_ResourceNotFound"
 _HTTP_FORBIDDEN = 403
 _HTTP_NOT_FOUND = 404
+_HTTP_CONFLICT = 409
+
+# MS Graph directory object base URL
+_GRAPH_DIRECTORY_OBJECTS_URL = "https://graph.microsoft.com/v1.0/directoryObjects"
 
 # Entra ID 사용자 기본 설정
 _DEFAULT_USAGE_LOCATION = "KR"
@@ -359,6 +365,99 @@ class EntraIDService:
                 enabled.append(user_ids[i])
 
         return enabled
+
+    async def add_user_to_group(
+        self,
+        user_object_id: str,
+        group_id: str,
+    ) -> bool:
+        """Entra ID 보안 그룹에 사용자를 추가한다.
+
+        이미 그룹에 속한 사용자를 다시 추가하면 멱등하게 True를 반환한다.
+
+        Args:
+            user_object_id: 사용자 Object ID.
+            group_id: 대상 보안 그룹 Object ID.
+
+        Returns:
+            성공 시 True.
+
+        Raises:
+            EntraIDAuthorizationError: 그룹 관리 권한이 부족한 경우.
+            GroupMembershipError: 그룹 멤버 추가에 실패한 경우.
+        """
+        try:
+            request_body = ReferenceCreate(
+                odata_id=f"{_GRAPH_DIRECTORY_OBJECTS_URL}/{user_object_id}",
+            )
+            await self.client.groups.by_group_id(group_id).members.ref.post(
+                request_body,
+            )
+            logger.info(
+                "Added user %s to group %s", user_object_id, group_id,
+            )
+            return True
+        except Exception as e:
+            error_code, response_code = self._extract_graph_error(e)
+
+            # Already a member — treat as success (idempotent)
+            if response_code == _HTTP_CONFLICT:
+                logger.info(
+                    "User %s already in group %s, skipping",
+                    user_object_id,
+                    group_id,
+                )
+                return True
+
+            if self._is_authorization_error(error_code, response_code, str(e)):
+                raise EntraIDAuthorizationError(
+                    f"사용자 '{user_object_id}'를 그룹 '{group_id}'에 추가할 권한이 없습니다. "
+                    "애플리케이션에 GroupMember.ReadWrite.All 권한이 필요합니다."
+                )
+
+            logger.error(
+                "Failed to add user %s to group %s: %s",
+                user_object_id,
+                group_id,
+                e,
+            )
+            raise GroupMembershipError(
+                f"사용자 '{user_object_id}'를 그룹 '{group_id}'에 추가 실패: {e}",
+                group_id=group_id,
+            )
+
+    async def add_users_to_group_bulk(
+        self,
+        user_object_ids: list[str],
+        group_id: str,
+    ) -> list[str]:
+        """여러 사용자를 Entra ID 보안 그룹에 동시에 추가한다.
+
+        Args:
+            user_object_ids: 사용자 Object ID 목록.
+            group_id: 대상 보안 그룹 Object ID.
+
+        Returns:
+            성공적으로 추가된 user_object_id 리스트.
+        """
+        tasks = [
+            self.add_user_to_group(uid, group_id) for uid in user_object_ids
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        added: list[str] = []
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.error(
+                    "Failed to add user %s to group %s: %s",
+                    user_object_ids[i],
+                    group_id,
+                    result,
+                )
+            else:
+                added.append(user_object_ids[i])
+
+        return added
 
     async def get_user(self, user_principal_name: str) -> Optional[dict]:
         """사용자 정보를 조회한다.

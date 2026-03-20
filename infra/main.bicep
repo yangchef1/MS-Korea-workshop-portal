@@ -54,6 +54,9 @@ param ghcrToken string
 @description('Email sender address for Azure Communication Services.')
 param emailSender string = ''
 
+@description('Entra ID Security Group Object ID for Conditional Access Policy exclusion.')
+param workshopAttendeesGroupId string = ''
+
 @description('MSAL tenant ID for JWT validation.')
 param azureTenantId string = tenantId
 
@@ -146,6 +149,7 @@ module containerApps 'modules/container-apps.bicep' = {
     allowedOrigins: 'https://${swa.outputs.defaultHostname}'
     containerAppsSubnetId: networking.outputs.containerAppsSubnetId
     imageTag: imageTag
+    workshopAttendeesGroupId: workshopAttendeesGroupId
   }
 }
 

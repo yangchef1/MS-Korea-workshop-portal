@@ -197,6 +197,16 @@ class UserDeletionError(EntraIDServiceError):
             self.details["user_id"] = user_id
 
 
+class GroupMembershipError(EntraIDServiceError):
+    """Failed to add or remove a user from an Entra ID security group."""
+
+    def __init__(self, message: str = "Group membership operation failed", group_id: str = None):
+        super().__init__(message)
+        self.code = "GROUP_MEMBERSHIP_ERROR"
+        if group_id:
+            self.details["group_id"] = group_id
+
+
 class InsufficientSubscriptionsError(AzureServiceError):
     """Available subscriptions are fewer than participants.
 

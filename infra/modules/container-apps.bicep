@@ -54,6 +54,9 @@ param imageTag string = ''
 @description('Allowed CORS origins (comma-separated).')
 param allowedOrigins string = ''
 
+@description('Entra ID Security Group Object ID for Conditional Access Policy exclusion. Empty disables group membership logic.')
+param workshopAttendeesGroupId string = ''
+
 @description('Container Apps subnet resource ID for VNet integration. Required for Private Endpoint connectivity to Storage.')
 param containerAppsSubnetId string
 
@@ -191,6 +194,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'ACS_CONNECTION_STRING', secretRef: 'acs-conn-str' }
             { name: 'EMAIL_SENDER', value: emailSender }
             { name: 'ALLOWED_ORIGINS', value: allowedOrigins }
+            { name: 'WORKSHOP_ATTENDEES_GROUP_ID', value: workshopAttendeesGroupId }
             { name: 'LOG_FORMAT', value: 'json' }
           ]
           probes: [
@@ -286,6 +290,7 @@ resource cleanupJob 'Microsoft.App/jobs@2024-03-01' = {
             { name: 'AZURE_SP_CLIENT_SECRET', secretRef: 'sp-client-secret' }
             { name: 'AZURE_SP_DOMAIN', value: spDomain }
             { name: 'TABLE_STORAGE_ACCOUNT', value: storageAccountName }
+            { name: 'WORKSHOP_ATTENDEES_GROUP_ID', value: workshopAttendeesGroupId }
             { name: 'LOG_FORMAT', value: 'json' }
           ]
         }
@@ -357,6 +362,7 @@ resource provisionJob 'Microsoft.App/jobs@2024-03-01' = {
             { name: 'AZURE_SP_CLIENT_SECRET', secretRef: 'sp-client-secret' }
             { name: 'AZURE_SP_DOMAIN', value: spDomain }
             { name: 'TABLE_STORAGE_ACCOUNT', value: storageAccountName }
+            { name: 'WORKSHOP_ATTENDEES_GROUP_ID', value: workshopAttendeesGroupId }
             { name: 'LOG_FORMAT', value: 'json' }
           ]
         }
