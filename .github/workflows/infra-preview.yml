@@ -50,6 +50,7 @@ jobs:
           AZURE_SP_CLIENT_SECRET: "dummy"
           ACS_CONNECTION_STRING: "dummy"
           GHCR_TOKEN: "dummy"
+          WORKSHOP_ATTENDEES_GROUP_ID: ${{ vars.WORKSHOP_ATTENDEES_GROUP_ID }}
         run: |
           OUTPUT=$(az deployment sub what-if \
             --location koreacentral \

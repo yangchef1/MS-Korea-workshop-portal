@@ -1055,6 +1055,33 @@ class WorkshopService:
                 raise InvalidInputError("Failed to create any Entra ID users")
             created_users = user_results
 
+            # Add users to Workshop_Attendees security group for immediate workshops only.
+            # Scheduled workshops are handled in provision_scheduled_workshop() after
+            # enable_users_bulk(), so we skip here to avoid duplicate Graph API calls.
+            if not pre_created_users and settings.workshop_attendees_group_id:
+                group_object_ids = [
+                    u["object_id"] for u in user_results if u.get("object_id")
+                ]
+                if group_object_ids:
+                    try:
+                        added = await self.entra_id.add_users_to_group_bulk(
+                            group_object_ids,
+                            settings.workshop_attendees_group_id,
+                        )
+                        logger.info(
+                            "Added %d/%d users to Workshop_Attendees group for workshop %s",
+                            len(added),
+                            len(group_object_ids),
+                            workshop_id,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to add users to Workshop_Attendees group "
+                            "for workshop %s (non-blocking): %s",
+                            workshop_id,
+                            e,
+                        )
+
             alias_to_sub = {
                 participant["alias"]: participant["subscription_id"]
                 for participant in participants
@@ -1299,6 +1326,7 @@ class WorkshopService:
 
         # Step 1: Enable all pre-created Entra ID accounts
         object_ids = [p["object_id"] for p in planned if p.get("object_id")]
+        enabled: list[str] = []
         if object_ids:
             enabled = await self.entra_id.enable_users_bulk(object_ids)
             logger.info(
@@ -1307,6 +1335,28 @@ class WorkshopService:
                 len(object_ids),
                 workshop_id,
             )
+
+        # Step 1.5: Add successfully enabled users to Workshop_Attendees group (non-blocking).
+        # Only users that were actually enabled are added; failed enables are skipped.
+        if enabled and settings.workshop_attendees_group_id:
+            try:
+                added = await self.entra_id.add_users_to_group_bulk(
+                    enabled,
+                    settings.workshop_attendees_group_id,
+                )
+                logger.info(
+                    "Added %d/%d users to Workshop_Attendees group for workshop %s",
+                    len(added),
+                    len(enabled),
+                    workshop_id,
+                )
+            except Exception as e:
+                logger.warning(
+                    "Failed to add users to Workshop_Attendees group "
+                    "for workshop %s (non-blocking): %s",
+                    workshop_id,
+                    e,
+                )
 
         # Step 2: Build pre_created_users for _execute_provisioning
         # These users already exist in Entra ID, so creation will be skipped
