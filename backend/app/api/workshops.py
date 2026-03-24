@@ -290,6 +290,24 @@ async def delete_workshop(
     return result
 
 
+@router.delete(
+    "/{workshop_id}/purge",
+    response_model=MessageResponse,
+    status_code=200,
+)
+async def purge_completed_workshop(
+    workshop_id: str,
+    _admin=Depends(require_admin),
+    workshop_service=Depends(get_workshop_service),
+):
+    """completed 상태의 워크샵을 영구 삭제한다 (관리자 전용).
+
+    이미 리소스가 정리된 completed 워크샵의 메타데이터를 제거한다.
+    completed 상태가 아닌 워크샵에는 사용할 수 없다.
+    """
+    return await workshop_service.purge_completed_workshop(workshop_id)
+
+
 # ------------------------------------------------------------------
 # Deletion failure endpoints
 # ------------------------------------------------------------------

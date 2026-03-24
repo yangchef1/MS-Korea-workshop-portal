@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router"
+import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import { useSuspenseQuery, useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { QRCodeSVG } from "qrcode.react"
 import { Suspense, useMemo, useState } from "react"
@@ -816,6 +816,7 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
   const { user } = useAuth()
   const isAdmin = user?.role === "admin"
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
   const { showSuccessToast, showErrorToast } = useCustomToast()
   const invalidAliases = new Set(
     workshop.invalid_participants?.map((p) => p.alias) || []
@@ -827,6 +828,18 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
       queryClient.invalidateQueries({ queryKey: ["workshops"] })
       queryClient.invalidateQueries({ queryKey: ["workshop", workshopId] })
       showSuccessToast("워크샵 정리가 시작되었습니다")
+    },
+    onError: () => {
+      showErrorToast("워크샵 삭제에 실패했습니다")
+    },
+  })
+
+  const purgeMutation = useMutation({
+    mutationFn: () => workshopApi.purge(workshopId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["workshops"] })
+      showSuccessToast("완료된 워크샵이 삭제되었습니다")
+      navigate({ to: "/" })
     },
     onError: () => {
       showErrorToast("워크샵 삭제에 실패했습니다")
@@ -952,6 +965,33 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
                 <AlertDialogCancel>취소</AlertDialogCancel>
                 <AlertDialogAction
                   onClick={() => deleteMutation.mutate()}
+                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                >
+                  삭제
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+          )}
+          {isCompleted && isAdmin && (
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button variant="destructive" size="sm" disabled={purgeMutation.isPending}>
+                <Trash2 className="h-4 w-4 mr-2" />
+                {purgeMutation.isPending ? "삭제 중..." : "삭제"}
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>완료된 워크샵을 삭제하시겠습니까?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  {`완료된 워크샵 "${workshop.name}"의 메타데이터를 영구 삭제합니다. 이미 정리된 리소스에는 영향이 없으며, 이 작업은 되돌릴 수 없습니다.`}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>취소</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() => purgeMutation.mutate()}
                   className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                 >
                   삭제
