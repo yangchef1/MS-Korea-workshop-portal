@@ -533,6 +533,10 @@ export const workshopApi = {
     await apiClient.delete(`/workshops/${id}`)
   },
 
+  purge: async (id: string): Promise<void> => {
+    await apiClient.delete(`/workshops/${id}/purge`)
+  },
+
   downloadPasswords: async (id: string): Promise<void> => {
     const response = await apiClient.get(`/workshops/${id}/passwords`, {
       responseType: 'blob'

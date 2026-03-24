@@ -1416,6 +1416,45 @@ class WorkshopService:
             pre_created_users=pre_created_users,
         )
 
+    async def purge_completed_workshop(self, workshop_id: str) -> MessageResponse:
+        """completed 상태의 워크샵 메타데이터를 영구 삭제한다 (Admin 전용).
+
+        이미 리소스가 정리된 completed 워크샵의 메타데이터와
+        관련 삭제 실패 기록을 제거한다.
+
+        Args:
+            workshop_id: 삭제할 워크샵 ID.
+
+        Returns:
+            삭제 결과 메시지.
+
+        Raises:
+            NotFoundError: 워크샵을 찾을 수 없는 경우.
+            InvalidInputError: 워크샵이 completed 상태가 아닌 경우.
+        """
+        metadata = await self.get_workshop_or_raise(workshop_id)
+
+        if metadata.get("status") != WORKSHOP_STATUS_COMPLETED:
+            raise InvalidInputError(
+                f"Only completed workshops can be purged. "
+                f"Current status: '{metadata.get('status')}'"
+            )
+
+        workshop_name = metadata.get("name", "")
+
+        await self.storage.delete_workshop_metadata(workshop_id)
+
+        logger.info(
+            "Purged completed workshop: %s (%s)",
+            workshop_id,
+            workshop_name,
+        )
+
+        return MessageResponse(
+            message="Completed workshop deleted successfully",
+            detail=f"Workshop '{workshop_name}' has been permanently removed.",
+        )
+
     async def delete_workshop(self, workshop_id: str) -> MessageResponse:
         """워크샵 정리를 시작한다 — 스냅샷 캡처 후 cleaning_up 상태로 전환.
 
