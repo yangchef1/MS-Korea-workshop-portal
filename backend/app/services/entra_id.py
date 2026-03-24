@@ -12,6 +12,11 @@ from typing import Optional
 _DELETE_MAX_RETRIES = 3
 _DELETE_INITIAL_DELAY_SECONDS = 2.0
 
+# Graph API transient errors when adding group members.
+# Retry with exponential backoff before giving up.
+_GROUP_ADD_MAX_RETRIES = 3
+_GROUP_ADD_INITIAL_DELAY_SECONDS = 1.0
+
 from msgraph import GraphServiceClient
 from msgraph.generated.models.password_profile import PasswordProfile
 from msgraph.generated.models.reference_create import ReferenceCreate
@@ -374,6 +379,7 @@ class EntraIDService:
         """Entra ID 보안 그룹에 사용자를 추가한다.
 
         이미 그룹에 속한 사용자를 다시 추가하면 멱등하게 True를 반환한다.
+        Graph API 일시적 오류에 대비해 지수 백오프로 재시도한다.
 
         Args:
             user_object_id: 사용자 Object ID.
@@ -384,47 +390,77 @@ class EntraIDService:
 
         Raises:
             EntraIDAuthorizationError: 그룹 관리 권한이 부족한 경우.
-            GroupMembershipError: 그룹 멤버 추가에 실패한 경우.
+            GroupMembershipError: 재시도 후에도 그룹 멤버 추가에 실패한 경우.
         """
-        try:
-            request_body = ReferenceCreate(
-                odata_id=f"{_GRAPH_DIRECTORY_OBJECTS_URL}/{user_object_id}",
-            )
-            await self.client.groups.by_group_id(group_id).members.ref.post(
-                request_body,
-            )
-            logger.info(
-                "Added user %s to group %s", user_object_id, group_id,
-            )
-            return True
-        except Exception as e:
-            error_code, response_code = self._extract_graph_error(e)
+        last_exception: Exception | None = None
 
-            # Already a member — treat as success (idempotent)
-            if response_code == _HTTP_CONFLICT:
+        for attempt in range(_GROUP_ADD_MAX_RETRIES):
+            try:
+                request_body = ReferenceCreate(
+                    odata_id=f"{_GRAPH_DIRECTORY_OBJECTS_URL}/{user_object_id}",
+                )
+                await self.client.groups.by_group_id(group_id).members.ref.post(
+                    request_body,
+                )
                 logger.info(
-                    "User %s already in group %s, skipping",
-                    user_object_id,
-                    group_id,
+                    "Added user %s to group %s", user_object_id, group_id,
                 )
                 return True
+            except Exception as e:
+                error_code, response_code = self._extract_graph_error(e)
 
-            if self._is_authorization_error(error_code, response_code, str(e)):
-                raise EntraIDAuthorizationError(
-                    f"사용자 '{user_object_id}'를 그룹 '{group_id}'에 추가할 권한이 없습니다. "
-                    "애플리케이션에 GroupMember.ReadWrite.All 권한이 필요합니다."
+                # Already a member — treat as success (idempotent)
+                if response_code == _HTTP_CONFLICT:
+                    logger.info(
+                        "User %s already in group %s, skipping",
+                        user_object_id,
+                        group_id,
+                    )
+                    return True
+
+                # Authorization errors are permanent — no retry
+                if self._is_authorization_error(error_code, response_code, str(e)):
+                    raise EntraIDAuthorizationError(
+                        f"사용자 '{user_object_id}'를 그룹 '{group_id}'에 추가할 권한이 없습니다. "
+                        "애플리케이션에 GroupMember.ReadWrite.All 권한이 필요합니다."
+                    )
+
+                last_exception = e
+
+                # Retry on transient errors
+                if attempt < _GROUP_ADD_MAX_RETRIES - 1:
+                    delay = _GROUP_ADD_INITIAL_DELAY_SECONDS * (2 ** attempt)
+                    logger.warning(
+                        "Failed to add user %s to group %s (attempt %d/%d), "
+                        "retrying in %.1fs: %s",
+                        user_object_id,
+                        group_id,
+                        attempt + 1,
+                        _GROUP_ADD_MAX_RETRIES,
+                        delay,
+                        e,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+
+                logger.error(
+                    "Failed to add user %s to group %s after %d retries: %s",
+                    user_object_id,
+                    group_id,
+                    _GROUP_ADD_MAX_RETRIES,
+                    e,
+                )
+                raise GroupMembershipError(
+                    f"사용자 '{user_object_id}'를 그룹 '{group_id}'에 추가 실패 "
+                    f"({_GROUP_ADD_MAX_RETRIES}회 재시도 후): {e}",
+                    group_id=group_id,
                 )
 
-            logger.error(
-                "Failed to add user %s to group %s: %s",
-                user_object_id,
-                group_id,
-                e,
-            )
-            raise GroupMembershipError(
-                f"사용자 '{user_object_id}'를 그룹 '{group_id}'에 추가 실패: {e}",
-                group_id=group_id,
-            )
+        # Should not reach here, but guard against it
+        raise GroupMembershipError(
+            f"사용자 '{user_object_id}'를 그룹 '{group_id}'에 추가 실패: {last_exception}",
+            group_id=group_id,
+        )
 
     async def add_users_to_group_bulk(
         self,
@@ -433,12 +469,19 @@ class EntraIDService:
     ) -> list[str]:
         """여러 사용자를 Entra ID 보안 그룹에 동시에 추가한다.
 
+        한 명이라도 실패하면 GroupMembershipError를 발생시킨다.
+        Conditional Access Policy 제외 그룹에 추가되지 않은 사용자는
+        워크샵 리소스에 접근할 수 없으므로 전원 추가를 보장한다.
+
         Args:
             user_object_ids: 사용자 Object ID 목록.
             group_id: 대상 보안 그룹 Object ID.
 
         Returns:
-            성공적으로 추가된 user_object_id 리스트.
+            성공적으로 추가된 user_object_id 리스트 (전원 성공 시).
+
+        Raises:
+            GroupMembershipError: 한 명 이상의 사용자 추가에 실패한 경우.
         """
         tasks = [
             self.add_user_to_group(uid, group_id) for uid in user_object_ids
@@ -446,6 +489,7 @@ class EntraIDService:
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         added: list[str] = []
+        failed: list[str] = []
         for i, result in enumerate(results):
             if isinstance(result, Exception):
                 logger.error(
@@ -454,8 +498,20 @@ class EntraIDService:
                     group_id,
                     result,
                 )
+                failed.append(user_object_ids[i])
             else:
                 added.append(user_object_ids[i])
+
+        if failed:
+            raise GroupMembershipError(
+                f"{len(failed)}/{len(user_object_ids)}명의 사용자를 "
+                f"보안 그룹 '{group_id}'에 추가하지 못했습니다. "
+                "Conditional Access Policy 제외 그룹에 추가되지 않으면 "
+                "워크샵 리소스에 접근할 수 없습니다. "
+                f"실패한 사용자: {', '.join(failed[:5])}"
+                + (" ..." if len(failed) > 5 else ""),
+                group_id=group_id,
+            )
 
         return added
 

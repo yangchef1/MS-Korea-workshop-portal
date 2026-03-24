@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta, timezone
 from typing import Any, Optional
 
 from app.config import settings
-from app.exceptions import AppError, InvalidDateRangeError, InvalidInputError, NotFoundError, PolicyNotFoundError
+from app.exceptions import AppError, GroupMembershipError, InvalidDateRangeError, InvalidInputError, NotFoundError, PolicyNotFoundError
 from app.models import DeletionFailureItem, MessageResponse, WorkshopCreateInput, WorkshopDetail, WorkshopResponse
 from app.services.cost import cost_service
 from app.services.email import email_service
@@ -459,7 +459,8 @@ class WorkshopService:
     ) -> None:
         """워크샵 생성 실패 시 이미 생성된 Azure 리소스를 정리한다.
 
-        정리 순서: 정책 할당 → 리소스 그룹(ARM 배포 포함) → Entra ID 유저(RBAC 포함) → 구독.
+        정리 순서: 보안 그룹 멤버십 → 정책 할당 → 리소스 그룹(ARM 배포 포함)
+        → Entra ID 유저(RBAC 포함) → 구독.
         각 단계의 실패는 로그만 남기고 다음 단계를 계속 진행한다.
         구독 해제는 workshop_id로 in_use_map을 역조회하여 고아 alloc도 함께 정리한다.
         """
@@ -472,6 +473,30 @@ class WorkshopService:
             len(created_rg_specs),
             len(assigned_subscription_ids),
         )
+
+        # Roll back security group membership (best-effort)
+        if created_users and settings.workshop_attendees_group_id:
+            object_ids = [
+                u["object_id"] for u in created_users if u.get("object_id")
+            ]
+            for oid in object_ids:
+                try:
+                    await self.entra_id.client.groups.by_group_id(
+                        settings.workshop_attendees_group_id,
+                    ).members.by_directory_object_id(oid).ref.delete()
+                    logger.info(
+                        "Rollback: removed user %s from Workshop_Attendees group",
+                        oid,
+                    )
+                except Exception as e:
+                    # Removal failure during rollback is non-fatal;
+                    # user deletion below will also remove group membership.
+                    logger.warning(
+                        "Rollback: failed to remove user %s from "
+                        "Workshop_Attendees group: %s",
+                        oid,
+                        e,
+                    )
 
         # Roll back policy assignments on subscription scope
         for subscription_id in assigned_subscription_ids:
@@ -1055,7 +1080,9 @@ class WorkshopService:
                 raise InvalidInputError("Failed to create any Entra ID users")
             created_users = user_results
 
-            # Add users to Workshop_Attendees security group for immediate workshops only.
+            # Add users to Workshop_Attendees security group (Conditional Access
+            # Policy exclusion group). Without this, users cannot access workshop
+            # resources. Failure is blocking — triggers rollback.
             # Scheduled workshops are handled in provision_scheduled_workshop() after
             # enable_users_bulk(), so we skip here to avoid duplicate Graph API calls.
             if not pre_created_users and settings.workshop_attendees_group_id:
@@ -1063,24 +1090,16 @@ class WorkshopService:
                     u["object_id"] for u in user_results if u.get("object_id")
                 ]
                 if group_object_ids:
-                    try:
-                        added = await self.entra_id.add_users_to_group_bulk(
-                            group_object_ids,
-                            settings.workshop_attendees_group_id,
-                        )
-                        logger.info(
-                            "Added %d/%d users to Workshop_Attendees group for workshop %s",
-                            len(added),
-                            len(group_object_ids),
-                            workshop_id,
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            "Failed to add users to Workshop_Attendees group "
-                            "for workshop %s (non-blocking): %s",
-                            workshop_id,
-                            e,
-                        )
+                    added = await self.entra_id.add_users_to_group_bulk(
+                        group_object_ids,
+                        settings.workshop_attendees_group_id,
+                    )
+                    logger.info(
+                        "Added %d/%d users to Workshop_Attendees group for workshop %s",
+                        len(added),
+                        len(group_object_ids),
+                        workshop_id,
+                    )
 
             alias_to_sub = {
                 participant["alias"]: participant["subscription_id"]
@@ -1336,27 +1355,20 @@ class WorkshopService:
                 workshop_id,
             )
 
-        # Step 1.5: Add successfully enabled users to Workshop_Attendees group (non-blocking).
-        # Only users that were actually enabled are added; failed enables are skipped.
+        # Step 1.5: Add enabled users to Workshop_Attendees security group
+        # (Conditional Access Policy exclusion group). Without this, users cannot
+        # access workshop resources. Failure is blocking — aborts provisioning.
         if enabled and settings.workshop_attendees_group_id:
-            try:
-                added = await self.entra_id.add_users_to_group_bulk(
-                    enabled,
-                    settings.workshop_attendees_group_id,
-                )
-                logger.info(
-                    "Added %d/%d users to Workshop_Attendees group for workshop %s",
-                    len(added),
-                    len(enabled),
-                    workshop_id,
-                )
-            except Exception as e:
-                logger.warning(
-                    "Failed to add users to Workshop_Attendees group "
-                    "for workshop %s (non-blocking): %s",
-                    workshop_id,
-                    e,
-                )
+            added = await self.entra_id.add_users_to_group_bulk(
+                enabled,
+                settings.workshop_attendees_group_id,
+            )
+            logger.info(
+                "Added %d/%d users to Workshop_Attendees group for workshop %s",
+                len(added),
+                len(enabled),
+                workshop_id,
+            )
 
         # Step 2: Build pre_created_users for _execute_provisioning
         # These users already exist in Entra ID, so creation will be skipped
