@@ -944,54 +944,35 @@ function WorkshopDetailContent({ workshopId }: { workshopId: string }) {
               계정 정보 다운로드
             </Button>
           )}
-          {!isCompleted && !isCleaningUp && (
+          {((!isCompleted && !isCleaningUp) || (isCompleted && isAdmin)) && (
           <AlertDialog>
             <AlertDialogTrigger asChild>
-              <Button variant="destructive" size="sm" disabled={deleteMutation.isPending}>
+              <Button
+                variant="destructive"
+                size="sm"
+                disabled={isCompleted ? purgeMutation.isPending : deleteMutation.isPending}
+              >
                 <Trash2 className="h-4 w-4 mr-2" />
-                {deleteMutation.isPending ? "삭제 중..." : "삭제"}
+                {(isCompleted ? purgeMutation.isPending : deleteMutation.isPending) ? "삭제 중..." : "삭제"}
               </Button>
             </AlertDialogTrigger>
             <AlertDialogContent>
               <AlertDialogHeader>
-                <AlertDialogTitle>워크샵을 삭제하시겠습니까?</AlertDialogTitle>
+                <AlertDialogTitle>
+                  {isCompleted ? "완료된 워크샵을 삭제하시겠습니까?" : "워크샵을 삭제하시겠습니까?"}
+                </AlertDialogTitle>
                 <AlertDialogDescription>
-                  {isScheduled
-                    ? `예약된 워크샵 "${workshop.name}"을(를) 삭제합니다. 아직 리소스가 생성되지 않았으므로 즉시 삭제됩니다.`
-                    : `워크샵 "${workshop.name}"을(를) 삭제하면 관련된 리소스 그룹과 참가자 계정이 모두 삭제됩니다. 이 작업은 되돌릴 수 없습니다.`}
+                  {isCompleted
+                    ? `완료된 워크샵 "${workshop.name}"의 메타데이터를 영구 삭제합니다. 이미 정리된 리소스에는 영향이 없으며, 이 작업은 되돌릴 수 없습니다.`
+                    : isScheduled
+                      ? `예약된 워크샵 "${workshop.name}"을(를) 삭제합니다. 아직 리소스가 생성되지 않았으므로 즉시 삭제됩니다.`
+                      : `워크샵 "${workshop.name}"을(를) 삭제하면 관련된 리소스 그룹과 참가자 계정이 모두 삭제됩니다. 이 작업은 되돌릴 수 없습니다.`}
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
                 <AlertDialogCancel>취소</AlertDialogCancel>
                 <AlertDialogAction
-                  onClick={() => deleteMutation.mutate()}
-                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                >
-                  삭제
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-          )}
-          {isCompleted && isAdmin && (
-          <AlertDialog>
-            <AlertDialogTrigger asChild>
-              <Button variant="destructive" size="sm" disabled={purgeMutation.isPending}>
-                <Trash2 className="h-4 w-4 mr-2" />
-                {purgeMutation.isPending ? "삭제 중..." : "삭제"}
-              </Button>
-            </AlertDialogTrigger>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>완료된 워크샵을 삭제하시겠습니까?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  {`완료된 워크샵 "${workshop.name}"의 메타데이터를 영구 삭제합니다. 이미 정리된 리소스에는 영향이 없으며, 이 작업은 되돌릴 수 없습니다.`}
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>취소</AlertDialogCancel>
-                <AlertDialogAction
-                  onClick={() => purgeMutation.mutate()}
+                  onClick={() => isCompleted ? purgeMutation.mutate() : deleteMutation.mutate()}
                   className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                 >
                   삭제
