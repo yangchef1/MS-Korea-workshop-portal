@@ -1,11 +1,12 @@
-"""Azure Cost Management \uc11c\ube44\uc2a4.
+"""Azure Cost Management 서비스.
 
-\uc6cc\ud06c\uc0f5 \ub9ac\uc18c\uc2a4 \uadf8\ub8f9 \ubc0f \uad6c\ub3c5 \ub2e8\uc704 \ube44\uc6a9\uc744 \uc870\ud68c\ud55c\ub2e4.
+워크샵 리소스 그룹 및 구독 단위 비용을 조회한다.
 
 Authentication: DefaultAzureCredential (OIDC/Managed Identity)
 """
 import asyncio
 import logging
+import random
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from typing import Optional
@@ -27,6 +28,13 @@ logger = logging.getLogger(__name__)
 # Cost API 응답에서 사용하는 상수
 _DEFAULT_CURRENCY = "USD"
 _COST_GRANULARITY = "Daily"
+
+# Azure Cost Management API rate limit retry configuration
+_MAX_RETRIES = 3
+_RETRY_BASE_DELAY_SECONDS = 2.0
+
+# Maximum concurrent Cost API requests to avoid 429 (rate limit)
+_COST_API_CONCURRENCY = 3
 
 # 워크샵 날짜는 KST(UTC+9) 기준으로 저장되므로 UTC 변환이 필요
 _KST_OFFSET = timedelta(hours=9)
@@ -232,10 +240,16 @@ class CostService:
 
         start_dt, end_dt, period_days = _parse_date_range(start_date, end_date, days)
 
-        tasks = [
-            self._get_subscription_cost_with_dates(sub_id, start_dt, end_dt)
-            for sub_id in seen_subs
-        ]
+        # Limit concurrency to _COST_API_CONCURRENCY to avoid 429 rate limits
+        semaphore = asyncio.Semaphore(_COST_API_CONCURRENCY)
+
+        async def _limited(sub_id: str) -> dict:
+            async with semaphore:
+                return await self._get_subscription_cost_with_dates(
+                    sub_id, start_dt, end_dt,
+                )
+
+        tasks = [_limited(sub_id) for sub_id in seen_subs]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         total_cost = 0.0
@@ -255,10 +269,13 @@ class CostService:
             else:
                 total_cost += result["total_cost"]
                 currency = result.get("currency", _DEFAULT_CURRENCY)
-                breakdown.append({
+                entry: dict = {
                     "subscription_id": sub_id,
                     "cost": result["total_cost"],
-                })
+                }
+                if result.get("error"):
+                    entry["error"] = result["error"]
+                breakdown.append(entry)
 
         return {
             "total_cost": round(total_cost, 2),
@@ -276,28 +293,57 @@ class CostService:
         start_date: datetime,
         end_date: datetime,
     ) -> dict:
-        """날짜 범위를 지정하여 구독 비용을 조회한다."""
-        try:
-            scope = f"/subscriptions/{subscription_id}"
-            query = _build_cost_query(start_date, end_date)
-            client = self._get_cost_client()
-            result = await asyncio.to_thread(
-                client.query.usage, scope=scope, parameters=query,
-            )
-            total_cost, currency = _sum_cost_rows(result)
-            return {
-                "subscription_id": subscription_id,
-                "total_cost": total_cost,
-                "currency": currency,
-            }
-        except Exception as e:
-            logger.error("Failed to query cost for subscription %s: %s", subscription_id, e)
-            return {
-                "subscription_id": subscription_id,
-                "total_cost": 0.0,
-                "currency": _DEFAULT_CURRENCY,
-                "error": str(e),
-            }
+        """날짜 범위를 지정하여 구독 비용을 조회한다.
+
+        429 Rate Limit 에러 시 최대 3회 지수 백오프 재시도한다.
+        """
+        scope = f"/subscriptions/{subscription_id}"
+        query = _build_cost_query(start_date, end_date)
+
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                client = self._get_cost_client()
+                result = await asyncio.to_thread(
+                    client.query.usage, scope=scope, parameters=query,
+                )
+                total_cost, currency = _sum_cost_rows(result)
+                return {
+                    "subscription_id": subscription_id,
+                    "total_cost": total_cost,
+                    "currency": currency,
+                }
+            except Exception as e:
+                error_str = str(e)
+                is_rate_limited = "429" in error_str or "Too many requests" in error_str
+
+                if is_rate_limited and attempt < _MAX_RETRIES:
+                    delay = _RETRY_BASE_DELAY_SECONDS * (2 ** attempt) + random.uniform(0, 1)
+                    logger.warning(
+                        "Rate limited querying cost for subscription %s "
+                        "(attempt %d/%d), retrying in %.1fs",
+                        subscription_id, attempt + 1, _MAX_RETRIES + 1, delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+
+                logger.error(
+                    "Failed to query cost for subscription %s: %s",
+                    subscription_id, e,
+                )
+                return {
+                    "subscription_id": subscription_id,
+                    "total_cost": 0.0,
+                    "currency": _DEFAULT_CURRENCY,
+                    "error": error_str,
+                }
+
+        # Should never reach here, but satisfy type checker
+        return {
+            "subscription_id": subscription_id,
+            "total_cost": 0.0,
+            "currency": _DEFAULT_CURRENCY,
+            "error": "Max retries exceeded",
+        }
 
     async def _get_workshop_cost_by_rg(
         self,

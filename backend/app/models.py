@@ -263,6 +263,7 @@ class CostResponse(BaseModel):
     start_date: Optional[str] = None
     end_date: Optional[str] = None
     breakdown: Optional[list[dict]] = None
+    is_snapshot: bool = False
 
 
 class MessageResponse(BaseModel):
