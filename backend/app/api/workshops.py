@@ -615,6 +615,7 @@ async def get_workshop_cost(
             start_date=snapshot.get("start_date"),
             end_date=snapshot.get("end_date"),
             breakdown=snapshot.get("breakdown"),
+            is_snapshot=True,
         )
 
     cost_specs = workshop_service.build_cost_specs(metadata.get("participants", []))
