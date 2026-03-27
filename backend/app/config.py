@@ -200,7 +200,7 @@ class Settings(BaseSettings):
 
     password_length: int = 16
 
-    default_user_role: str = "Contributor"
+    default_user_role: str = "Owner"
     resource_group_prefix: str = "rg-workshop"
 
     # Entra ID Security Group for Conditional Access Policy exclusion
